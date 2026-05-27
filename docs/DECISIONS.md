@@ -58,6 +58,76 @@ The stub is intentionally minimal: it builds without ffmpeg and serves only `GET
 
 ---
 
+## ISSUE-06: `FFmpegContainer` and `VideoProcessingWorkflow` must be exported from the entry point
+
+**Decision**: Created stub files `src/container.ts` (`FFmpegContainer extends Container`)
+and `src/workflow.ts` (`VideoProcessingWorkflow extends WorkflowEntrypoint`),
+and re-exported both from `src/index.ts`.
+
+**Reason**: Wrangler validates that every class referenced in `containers`,
+`durable_objects.bindings`, and `workflows` config sections is exported from the
+Worker entry point (`src/index.ts`). Without those exports, `wrangler dev` (and
+`wrangler deploy`) fail with:
+
+> "Your Worker depends on the following Durable Objects, which are not exported
+> in your entrypoint file: FFmpegContainer."
+
+The full implementations are deferred to later issues. The stubs are the
+minimum needed: `FFmpegContainer extends Container` with `defaultPort = 8080`,
+and `VideoProcessingWorkflow extends WorkflowEntrypoint` with a `run()` that
+throws `"not yet implemented"`.
+
+**Additional finding**: The `Container` base class is not part of
+`@cloudflare/workers-types` — it lives in the separate `@cloudflare/containers`
+npm package. This package was added as a production dependency.
+
+**Implication**: The container implementation issue must replace the stub
+`src/container.ts` (set `sleepAfter`, add the `fetch` handler and health-check
+logic). The workflow implementation issue must replace `src/workflow.ts` with
+the full six-step pipeline. Both files already have JSDoc noting they are stubs.
+
+---
+
+## ISSUE-06: `assets` block requires a `directory` property
+
+**Decision**: Added `"directory": "./public"` to the `assets` block in both
+`wrangler.jsonc.tpl` and the generated `wrangler.jsonc`.
+
+**Reason**: Wrangler validates that the `assets` configuration block contains a
+`directory` field and rejects startup with:
+
+> "The `assets` property in your configuration is missing the required `directory` property."
+
+The original template (written in ISSUE-03/05) included `binding`,
+`not_found_handling`, and `run_worker_first` but omitted the required `directory`
+key. The `directory` value must be a path relative to the config file — `"./public"`
+points at the placeholder `public/index.html` committed in ISSUE-06, and will
+continue to point at the Vite build output in ISSUE-19.
+
+**Implication**: All future issues that regenerate `wrangler.jsonc` via
+`npm run provision` will get the correct `directory` field from the updated
+template.
+
+---
+
+## ISSUE-06: Use `public/*` not `public/` in .gitignore to allow placeholder
+
+**Decision**: Changed the `.gitignore` pattern from `public/` to `public/*` and
+added `!public/index.html` to commit the placeholder HTML file.
+
+**Reason**: Git does not traverse into directories that are matched by a
+directory-level ignore rule (`public/`). A negation entry (`!public/index.html`)
+after an ignored directory has no effect because git stops at the directory
+boundary. Switching to a glob pattern (`public/*`) ignores the directory's
+*contents* while leaving the directory itself traversable, which allows the
+`!public/index.html` negation to take effect.
+
+**Implication**: In ISSUE-19, when Vite is configured to build into `public/`,
+the `.gitignore` will need to be updated to re-ignore the generated output files
+while retaining the ability to commit any committed placeholder files.
+
+---
+
 ## ISSUE-01/02: check:markdown scope narrowed to docs/**/*.md
 
 **Decision**: The `check:markdown` script was changed from `'**/*.md' '#node_modules'` to `'docs/**/*.md' '#node_modules'` (by the operator, during ISSUE-02 execution).

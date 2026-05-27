@@ -46,6 +46,7 @@
   },
   "dependencies": {
     "@adrianhall/cloudflare-auth": "github:adrianhall/cloudflare-auth#1.0.1",
+    "@cloudflare/containers": "^0.3.5",
     "hono": "^4.12.23"
   }
 }

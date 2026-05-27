@@ -3,7 +3,13 @@
 ###
 
 ### <!-- Build output -->
-public/
+# public/ is the Vite build output directory (ISSUE-19 will produce this).
+# We ignore the contents (public/*) rather than the directory itself so that
+# the placeholder index.html can be committed via the negation below.
+# In ISSUE-19, once Vite outputs the real SPA here, update this to re-ignore
+# the generated files while retaining this placeholder approach.
+public/*
+!public/index.html
 
 ### <!-- ENVIRONMENT -->
 .dev.vars

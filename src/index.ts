@@ -119,3 +119,14 @@ app.get("/api/version", (c) => c.json({ version: "1.0.0" }));
 app.get("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 
 export default app;
+
+// ---------------------------------------------------------------------------
+// Durable Object / Workflow class exports — required by Wrangler.
+//
+// Wrangler validates that every class referenced in the `containers`,
+// `durable_objects.bindings`, and `workflows` sections of wrangler.jsonc is
+// exported from the Worker entry point.  Re-export them here so they are
+// visible from this module without duplicating their definitions.
+// ---------------------------------------------------------------------------
+export { FFmpegContainer } from "./container";
+export { VideoProcessingWorkflow } from "./workflow";

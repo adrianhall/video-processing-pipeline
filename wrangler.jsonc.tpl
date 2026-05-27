@@ -26,12 +26,15 @@
   },
 
   // Assets binding for the React SPA.
+  // directory: the folder Wrangler uploads as static assets; in dev this is the
+  //   placeholder public/index.html; in production it is the Vite build output.
   // run_worker_first: true — required by cloudflare-auth. All requests (including
-  // the initial page load) must flow through the Worker middleware chain so the
-  // auth cookie is set before the SPA makes API calls.
+  //   the initial page load) must flow through the Worker middleware chain so the
+  //   auth cookie is set before the SPA makes API calls.
   // not_found_handling: "single-page-application" — required for client-side routing
-  // so that refreshing a deep URL (e.g. /videos/123) serves index.html rather than 404.
+  //   so that refreshing a deep URL (e.g. /videos/123) serves index.html rather than 404.
   "assets": {
+    "directory": "./public",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     "run_worker_first": true
