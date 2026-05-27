@@ -31,7 +31,7 @@
     "db:migrate:remote": "wrangler d1 migrations apply video-pipeline-db",
     "db:migrate:local": "wrangler d1 migrations apply video-pipeline-db --local",
     "prestart": "run-s generate:types build db:migrate:local",
-    "start": "wrangler dev"
+    "start": "wrangler dev --remote"
   },
   "devDependencies": {
     "@adrianhall/cloudflare-scripts": "github:adrianhall/cloudflare-scripts#v1.0.1",

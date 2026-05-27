@@ -432,6 +432,7 @@ videosRouter.get("/:id/stream", async (c) => {
   const { id } = c.req.param();
   console.log(`[stream] GET /:id/stream — id=${id}`);
 
+  // ── 1. Look up r2_bw_key in D1 ───────────────────────────────────────────
   let row: { r2_bw_key: string | null } | null;
   try {
     row = await c.env.DB.prepare("SELECT r2_bw_key FROM videos WHERE id = ?")
@@ -456,7 +457,7 @@ videosRouter.get("/:id/stream", async (c) => {
 
   if (!row.r2_bw_key) {
     console.log(
-      `[stream] 404 — r2_bw_key is null for id=${id} (not yet processed)`,
+      `[stream] 404 — r2_bw_key null for id=${id} (processing not yet complete)`,
     );
     return c.json(
       { error: "Video is not yet ready for playback — processing in progress" },
@@ -464,47 +465,99 @@ videosRouter.get("/:id/stream", async (c) => {
     );
   }
 
-  console.log(`[stream] fetching R2 key=${row.r2_bw_key}`);
+  // ── 2. Generate a presigned GET URL and fetch directly from R2 ────────────
+  //
+  // We use a presigned URL + fetch rather than the BUCKET binding because in
+  // `wrangler dev` (local mode) the BUCKET binding reads from wrangler's local
+  // R2 simulation, while the ffmpeg container writes processed files to the
+  // REAL R2 bucket via presigned PUT URLs.  These two storage locations are
+  // separate, so the binding would always return null for files the container
+  // uploaded.  Using the S3-compatible presigned URL bypasses the local
+  // simulation and reaches the real bucket in both dev and production.
+  //
+  // The Worker's fetch() goes directly to the internet (not through the Docker
+  // cloudflare/proxy-everything sidecar), so there is no SSL-interception
+  // issue here — that issue was specific to the container's network stack.
+  console.log(`[stream] generating presigned GET URL for key=${row.r2_bw_key}`);
 
-  // Forward the browser's Range header to R2 so seeking works without
-  // re-downloading the whole file.
+  let presignedUrl: string;
+  try {
+    presignedUrl = await generatePresignedUrl(
+      c.env,
+      c.env.R2_BUCKET_NAME,
+      row.r2_bw_key,
+      "GET",
+      3600,
+    );
+  } catch (err) {
+    return c.json(
+      {
+        error: "Failed to generate playback URL",
+        detail: err instanceof Error ? err.message : String(err),
+      },
+      500,
+    );
+  }
+
+  // ── 3. Forward the request to R2, passing any Range header for seek ───────
   const rangeHeader = c.req.header("range");
-  const obj = await c.env.BUCKET.get(
-    row.r2_bw_key,
-    rangeHeader ? { range: c.req.raw.headers } : undefined,
+  const fetchInit: RequestInit = rangeHeader
+    ? { headers: { Range: rangeHeader } }
+    : {};
+
+  console.log(
+    `[stream] fetching from real R2 (range=${rangeHeader ?? "none"})`,
   );
 
-  if (!obj) {
-    console.log(`[stream] 404 — R2 object not found for key=${row.r2_bw_key}`);
-    return c.json({ error: "Video file not found in storage" }, 404);
+  let r2Resp: Response;
+  try {
+    r2Resp = await fetch(presignedUrl, fetchInit);
+  } catch (err) {
+    return c.json(
+      {
+        error: "Failed to fetch video from storage",
+        detail: err instanceof Error ? err.message : String(err),
+      },
+      500,
+    );
   }
 
   console.log(
-    `[stream] R2 object found — size=${obj.size} range=${JSON.stringify(obj.range ?? null)}`,
+    `[stream] R2 response — HTTP ${r2Resp.status}` +
+      ` Content-Length=${r2Resp.headers.get("Content-Length") ?? "?"}`,
   );
 
-  const headers = new Headers({
+  if (r2Resp.status === 404 || r2Resp.status === 403) {
+    console.log(
+      `[stream] 404 — R2 object not accessible for key=${row.r2_bw_key} (R2 status=${r2Resp.status})`,
+    );
+    return c.json({ error: "Video file not found in storage" }, 404);
+  }
+
+  if (!r2Resp.ok && r2Resp.status !== 206) {
+    return c.json(
+      { error: `Unexpected R2 response: HTTP ${r2Resp.status}` },
+      502,
+    );
+  }
+
+  // ── 4. Build the response, passing through R2 range/length headers ────────
+  const responseHeaders = new Headers({
     "Content-Type": "video/mp4",
     "Accept-Ranges": "bytes",
     "Cache-Control": "public, max-age=3600",
   });
 
-  let status = 200;
+  const contentLength = r2Resp.headers.get("Content-Length");
+  if (contentLength) responseHeaders.set("Content-Length", contentLength);
 
-  if (rangeHeader && obj.range) {
-    const r = obj.range;
-    if ("offset" in r) {
-      const start = r.offset ?? 0;
-      const end = r.length ? start + r.length - 1 : obj.size - 1;
-      headers.set("Content-Range", `bytes ${start}-${end}/${obj.size}`);
-      headers.set("Content-Length", String(end - start + 1));
-      status = 206;
-    }
-  } else {
-    headers.set("Content-Length", String(obj.size));
-  }
+  const contentRange = r2Resp.headers.get("Content-Range");
+  if (contentRange) responseHeaders.set("Content-Range", contentRange);
 
-  return new Response(obj.body, { status, headers });
+  return new Response(r2Resp.body, {
+    status: r2Resp.status, // 200 or 206
+    headers: responseHeaders,
+  });
 });
 
 // ===========================================================================
