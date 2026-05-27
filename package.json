@@ -1,0 +1,15 @@
+{
+  "name": "video-processing-pipeline",
+  "version": "1.0.0",
+  "description": "A video processing pipeline app for Cloudflare Workers",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "check": "run-s check:*",
+    "check:markdown": "markdownlint-cli2 **/*.md"
+  },
+  "devDependencies": {
+    "markdownlint-cli2": "0.22.1",
+    "npm-run-all2": "^9.0.1"
+  }
+}
