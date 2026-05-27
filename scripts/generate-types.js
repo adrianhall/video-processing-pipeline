@@ -54,8 +54,9 @@ if (existsSync(TYPES)) {
 
 // ── 3. Run wrangler types ────────────────────────────────────────────────────
 // Target src/worker-configuration.d.ts so src/tsconfig.json picks it up.
-// --include-runtime=false: omit bundled workerd runtime types; src/tsconfig.json
-//   already references @cloudflare/workers-types for those.
+// --include-runtime (default true): embed the workerd runtime globals alongside
+//   the Env interface so @cloudflare/workers-types is not needed as a separate
+//   devDependency. This is the Cloudflare-recommended approach.
 // --strict-vars=false: emit `string` for var types rather than string literals.
 //   With strict-vars=true, wrangler embeds actual token values as literal types
 //   (e.g. R2_SECRET_ACCESS_KEY: "cfat_..."). Since wrangler.jsonc and .env are
@@ -63,13 +64,7 @@ if (existsSync(TYPES)) {
 // shell: true is required on Windows where npx is a .cmd file, not a binary.
 const result = spawnSync(
   "npx",
-  [
-    "wrangler",
-    "types",
-    "src/worker-configuration.d.ts",
-    "--include-runtime=false",
-    "--strict-vars=false",
-  ],
+  ["wrangler", "types", "src/worker-configuration.d.ts", "--strict-vars=false"],
   { stdio: "inherit", shell: true },
 );
 

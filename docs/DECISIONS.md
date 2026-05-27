@@ -58,6 +58,35 @@ The stub is intentionally minimal: it builds without ffmpeg and serves only `GET
 
 ---
 
+## ISSUE-06: Switch to `wrangler types --include-runtime` (drop `@cloudflare/workers-types`)
+
+**Decision**: Removed `@cloudflare/workers-types` from `devDependencies`, removed
+`"types": ["@cloudflare/workers-types"]` from `src/tsconfig.json`, dropped
+`--include-runtime=false` from the `generate-types.js` script, added `@types/node`
+(required when `nodejs_compat` is enabled, per Wrangler's own recommendation), and
+excluded the generated `src/worker-configuration.d.ts` from Biome's scope.
+
+**Reason**: The original setup used `--include-runtime=false` to keep the committed
+`worker-configuration.d.ts` small. The trade-off is an extra devDependency
+(`@cloudflare/workers-types`) whose version has to be kept in sync with Wrangler
+manually. The Cloudflare-recommended and workers-best-practices canonical approach
+is to let `wrangler types` (with the default `--include-runtime=true`) produce a
+self-contained file. This also improves binding types: with `--include-runtime`,
+Wrangler generates proper generics (`DurableObjectNamespace<FFmpegContainer>` and
+`Workflow<VideoWorkflowParams>`) rather than bare unparameterised types.
+
+**Side-effects**:
+
+- `src/worker-configuration.d.ts` grew from 46 lines to ~13,700 lines. The file
+  is still committed because `wrangler.jsonc` (needed to regenerate it) is
+  gitignored; without a committed copy, TypeScript would fail in a freshly cloned
+  repo before provisioning.
+- The generated file contains `any` in Cloudflare's own runtime declarations.
+  `src/worker-configuration.d.ts` is now excluded from Biome's `includes` in
+  `biome.json`; previously it was covered but the 46-line file had no violations.
+
+---
+
 ## ISSUE-06: `FFmpegContainer` and `VideoProcessingWorkflow` must be exported from the entry point
 
 **Decision**: Created stub files `src/container.ts` (`FFmpegContainer extends Container`)

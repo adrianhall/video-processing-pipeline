@@ -36,7 +36,7 @@
     "@adrianhall/cloudflare-scripts": "github:adrianhall/cloudflare-scripts",
     "@biomejs/biome": "^2.4.15",
     "@cloudflare/vitest-pool-workers": "^0.16.10",
-    "@cloudflare/workers-types": "^4.20260527.1",
+    "@types/node": "^25.9.1",
     "markdownlint-cli2": "0.22.1",
     "npm-run-all2": "^9.0.1",
     "shx": "^0.4.0",

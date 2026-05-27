@@ -8,8 +8,7 @@
     "outDir": "dist",
     "rootDir": ".",
     "strict": true,
-    "skipLibCheck": true,
-    "types": ["@cloudflare/workers-types"]
+    "skipLibCheck": true
   },
   "include": ["./**/*.ts"]
 }

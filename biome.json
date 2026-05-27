@@ -24,7 +24,8 @@
       "!**/public/",
       "!**/infra/",
       "!**/.wrangler/",
-      "!**/container/"
+      "!**/container/",
+      "!src/worker-configuration.d.ts"
     ]
   }
 }
