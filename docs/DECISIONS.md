@@ -44,6 +44,20 @@ Records variances from the plan and reasons. Each entry includes the issue where
 
 ---
 
+## ISSUE-04: Placeholder container/Dockerfile added to unblock local development
+
+**Decision**: Added a minimal stub `container/Dockerfile` (Python stdlib HTTP server on port 8080) ahead of the full ffmpeg container implementation issue.
+
+**Reason**: Wrangler validates that the path referenced by `"image": "./container/Dockerfile"` in `wrangler.jsonc` points to a real file when parsing config. Without the file, every `wrangler` command — including `wrangler d1 migrations apply --local` — fails with:
+
+> "The image "./container/Dockerfile" does not appear to be a valid path to a Dockerfile"
+
+The stub is intentionally minimal: it builds without ffmpeg and serves only `GET /health → 200`. It will be replaced entirely by the full Flask + ffmpeg implementation in the container issue.
+
+**Implication**: The container implementation issue should overwrite `container/Dockerfile` (and add `container/server.py` and `container/requirements.txt`) without needing to account for this stub.
+
+---
+
 ## ISSUE-01/02: check:markdown scope narrowed to docs/**/*.md
 
 **Decision**: The `check:markdown` script was changed from `'**/*.md' '#node_modules'` to `'docs/**/*.md' '#node_modules'` (by the operator, during ISSUE-02 execution).
