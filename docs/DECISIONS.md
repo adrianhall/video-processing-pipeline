@@ -282,6 +282,18 @@ treat it as a property of type `string | number`, not a callable method.
 
 ---
 
+## ISSUE-18: Stream iframe URL derived from API response, not constructed from account ID
+
+**Decision**: The `stream_url` stored in D1 is derived from `data.result.preview.replace("/watch", "/iframe")` rather than constructed as `https://customer-${env.CF_ACCOUNT_ID}.cloudflarestream.com/${uid}/iframe`.
+
+**Reason**: The Cloudflare Stream "copy from URL" API response includes a `preview` field with the format `https://customer-<CODE>.cloudflarestream.com/<UID>/watch`. The `<CODE>` segment is a **customer subdomain** assigned by Cloudflare Stream and is distinct from the account ID. Using `CF_ACCOUNT_ID` as the customer code would produce an invalid URL. Deriving the iframe URL from the response's own `preview` field ensures the correct customer code is always used, without requiring an additional environment variable.
+
+**Implementation**: `StreamApiResponse` is typed as a discriminated union that includes `result.preview` on the success branch. Replacing `/watch` with `/iframe` yields the standard embed URL expected by the Stream player.
+
+**Implication**: The `CF_ACCOUNT_ID` env var is used only for the Stream API endpoint path (correct), not for URL construction. The frontend (ISSUE-22) should use `stream_video_id` for the `@cloudflare/stream-react` `<Stream src={...}>` prop and `stream_url` for the iframe embed.
+
+---
+
 ## ISSUE-01/02: check:markdown scope narrowed to docs/**/*.md
 
 **Decision**: The `check:markdown` script was changed from `'**/*.md' '#node_modules'` to `'docs/**/*.md' '#node_modules'` (by the operator, during ISSUE-02 execution).

@@ -26,9 +26,8 @@
  *
  * ## Current state
  *
- * Steps 1–4 are fully implemented. Steps 5 and 6 are scaffolded as clearly-labelled
- * placeholder comments that describe what each step will do and which R2 keys it
- * reads / writes. They will be filled in by ISSUE-18.
+ * All six steps are fully implemented. The full pipeline runs end-to-end:
+ * raw upload → MP4 transcode → audio extraction → grayscale → Stream upload → finalize.
  *
  * @module workflow
  */
@@ -62,6 +61,50 @@ import type { VideoWorkflowParams } from "./types";
 type ContainerResult =
   | { ok: true; duration_seconds: number }
   | { ok: false; error: string; stderr?: string };
+
+/**
+ * JSON response shape returned by the Cloudflare Stream "copy from URL" API
+ * (`POST /client/v4/accounts/{account_id}/stream/copy`).
+ *
+ * The API always returns a top-level `success` boolean.  On success, `result`
+ * contains the new video's metadata including its unique `uid` and a `preview`
+ * watch URL.  On failure, `errors` holds one or more error objects with a
+ * numeric code and a human-readable message.
+ *
+ * The `preview` URL has the form:
+ * `https://customer-<CODE>.cloudflarestream.com/<UID>/watch`
+ * where `<CODE>` is the account-specific customer subdomain assigned by
+ * Cloudflare Stream (distinct from the account ID).  Replacing `/watch` with
+ * `/iframe` yields the standard embed URL expected by the Stream player.
+ *
+ * @example
+ * ```ts
+ * const data = await resp.json<StreamApiResponse>();
+ * if (!data.success) {
+ *   throw new Error(`Stream upload failed: ${JSON.stringify(data.errors)}`);
+ * }
+ * const streamUrl = data.result.preview.replace("/watch", "/iframe");
+ * ```
+ */
+type StreamApiResponse =
+  | {
+      success: true;
+      errors: [];
+      result: {
+        /** Unique video UID assigned by Cloudflare Stream. */
+        uid: string;
+        /**
+         * Direct watch URL for the video.  Replace "/watch" with "/iframe" to
+         * obtain the embeddable iframe URL understood by the Stream player.
+         */
+        preview: string;
+      };
+    }
+  | {
+      success: false;
+      errors: Array<{ code: number; message: string }>;
+      result: null;
+    };
 
 /**
  * Multi-step workflow that processes an uploaded video from raw format through
@@ -148,7 +191,6 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
     //   originalFormat — used in Step 2 to decide whether transcoding is needed.
     //   r2IncomingKey  — used in Step 2 (transcode input) and Step 6 (cleanup).
     //
-    // biome-ignore lint/correctness/noUnusedVariables: filename is used in Step 5 (ISSUE-18)
     const { videoId, filename, originalFormat, r2IncomingKey } = event.payload;
 
     try {
@@ -434,38 +476,133 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
       );
 
       // =======================================================================
-      // STEP 5: Upload grayscale video to Cloudflare Stream  (ISSUE-18)
+      // STEP 5: Upload grayscale video to Cloudflare Stream
       // =======================================================================
       // Purpose: Ingest the grayscale MP4 into Cloudflare Stream so it can be
       // served as an adaptive-bitrate HLS/DASH stream via the Stream player.
-      // Uses the "copy from URL" API — Stream pulls the file from R2 directly.
+      // Uses the "copy from URL" API — Stream pulls the file from R2 directly,
+      // so the Worker never proxies the video bytes.
       //
       // How it works:
-      //  1. Generate a presigned GET URL for "bwvideo/{videoId}.mp4" (valid 1 h).
-      //  2. POST to the Stream API with the presigned URL and filename as metadata.
-      //  3. Poll Stream until readyToStream === true (or sleep and check in Step 6).
+      //  1. Flip D1 status to "uploading_to_stream" so the UI reflects the stage.
+      //  2. Generate a 1-hour presigned GET URL for "bwvideo/{videoId}.mp4".
+      //  3. POST to the Stream "copy from URL" API, passing the presigned URL and
+      //     the original filename as metadata.
+      //  4. Extract the video UID and derive the iframe embed URL from the
+      //     response's `preview` field (replace "/watch" with "/iframe").
+      //  5. Persist stream_video_id and stream_url to D1.
+      //
+      // The step is retried up to 3 times with a 30-second delay to handle
+      // transient Stream API errors or temporary network issues.
       //
       // D1 status while running: "uploading_to_stream"
       // Input:  "bwvideo/{videoId}.mp4" (r2_bw_key from Step 4)
-      // Output: Cloudflare Stream UID and playback URL (stored as stream_video_id
-      //         and stream_url in D1)
-      //
-      // TODO (ISSUE-18): await step.do("upload-to-stream", async () => { … });
+      // Output: Cloudflare Stream UID and iframe embed URL (stream_video_id and
+      //         stream_url stored in D1 for the frontend player)
+      await step.do(
+        "upload-to-stream",
+        { retries: { limit: 3, delay: "30 seconds" } },
+        async () => {
+          // Mark the video as actively uploading to Stream so the UI reflects
+          // the current pipeline stage before the API call begins.
+          await this.env.DB.prepare(
+            "UPDATE videos SET status = ?, updated_at = ? WHERE id = ?",
+          )
+            .bind("uploading_to_stream", new Date().toISOString(), videoId)
+            .run();
+
+          // Generate a presigned GET URL for Stream to download the grayscale
+          // video from R2.  One hour is more than sufficient for the Stream API
+          // to initiate its internal download before the URL expires.
+          const videoUrl = await generatePresignedUrl(
+            this.env,
+            this.env.R2_BUCKET_NAME,
+            `bwvideo/${videoId}.mp4`,
+            "GET",
+            3600,
+          );
+
+          // Call the Cloudflare Stream "copy from URL" API.
+          // Stream pulls the file from R2 via the presigned URL; the Worker
+          // never sees the video bytes, which would exhaust the 128 MB memory
+          // limit.  The `meta.name` field sets the display name in the Stream
+          // dashboard and is useful for debugging.
+          const resp = await fetch(
+            `https://api.cloudflare.com/client/v4/accounts/${this.env.CF_ACCOUNT_ID}/stream/copy`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${this.env.CF_API_TOKEN}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ url: videoUrl, meta: { name: filename } }),
+            },
+          );
+
+          const data = await resp.json<StreamApiResponse>();
+          if (!data.success) {
+            throw new Error(
+              `Stream upload failed: ${JSON.stringify(data.errors)}`,
+            );
+          }
+
+          // The video UID is stored for the @cloudflare/stream-react player,
+          // which accepts a UID as its `src` prop.
+          const streamVideoId = data.result.uid;
+
+          // Derive the iframe embed URL from the preview URL returned by the
+          // Stream API.  The preview URL is:
+          //   https://customer-<CODE>.cloudflarestream.com/<UID>/watch
+          // where <CODE> is the account-specific customer subdomain — distinct
+          // from the account ID.  We cannot construct this URL from env vars
+          // alone, so we derive it from the response instead.
+          const streamUrl = data.result.preview.replace("/watch", "/iframe");
+
+          await this.env.DB.prepare(
+            "UPDATE videos SET stream_video_id = ?, stream_url = ?, updated_at = ? WHERE id = ?",
+          )
+            .bind(streamVideoId, streamUrl, new Date().toISOString(), videoId)
+            .run();
+        },
+      );
 
       // =======================================================================
-      // STEP 6: Finalize  (ISSUE-18)
+      // STEP 6: Finalize
       // =======================================================================
-      // Purpose: Mark the pipeline complete, persist the Stream playback URL, and
-      // clean up the raw incoming file from R2 to avoid storing redundant data.
+      // Purpose: Mark the pipeline complete and clean up the raw incoming file
+      // from R2 to avoid storing redundant data indefinitely.
       //
       // How it works:
-      //  1. UPDATE videos SET status = "complete", stream_url = …, updated_at = …
-      //  2. DELETE the r2IncomingKey object from BUCKET (raw upload no longer needed).
+      //  1. DELETE the raw uploaded file (r2IncomingKey) from R2.
+      //     The file is no longer needed: the transcoded MP4 ("video/"), the
+      //     audio MP3 ("audio/"), the grayscale MP4 ("bwvideo/"), and the
+      //     Stream copy all originate from Steps 2–5.
+      //  2. UPDATE the D1 row to status = "complete".  This is the terminal
+      //     state — the UI will hide the processing indicator and show the
+      //     Stream player.
       //
-      // Input:  r2IncomingKey (to delete), stream_url (from Step 5)
-      // Output: filename recorded in D1 history for audit; stream_url surfaced to UI
+      // Order matters: delete first, then mark complete.  If the D1 update
+      // fails and the step retries, the delete is idempotent (R2 delete on a
+      // missing key is a no-op), so re-running is safe.
       //
-      // TODO (ISSUE-18): await step.do("finalize", async () => { … });
+      // D1 status after this step: "complete"
+      // Cleanup: r2IncomingKey deleted from BUCKET
+      await step.do("finalize", async () => {
+        // Delete the raw incoming file from R2.  It has now been transcoded,
+        // audio-extracted, converted to grayscale, and ingested into Stream —
+        // keeping it would waste R2 storage without adding value.
+        // R2 delete is idempotent: calling it on a missing key is a no-op, so
+        // retrying this step is safe.
+        await this.env.BUCKET.delete(r2IncomingKey);
+
+        // Mark the video as complete in D1.  This is the last status transition
+        // in the pipeline and signals to the UI that Stream playback is ready.
+        await this.env.DB.prepare(
+          "UPDATE videos SET status = ?, updated_at = ? WHERE id = ?",
+        )
+          .bind("complete", new Date().toISOString(), videoId)
+          .run();
+      });
     } catch (err) {
       // -----------------------------------------------------------------------
       // Error handler — runs if any step above throws after exhausting its retries.
