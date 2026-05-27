@@ -477,6 +477,36 @@ negation takes effect.  See ISSUE-06 decisions for the rationale.
 
 ---
 
+## ISSUE-20: MP4 fast-path must use presigned URLs, not BUCKET binding
+
+**Decision**: Replaced `BUCKET.get(r2IncomingKey)` + `BUCKET.put(outputKey, obj.body)`
+in the transcode step's MP4 fast-path with a presigned GET → presigned PUT streaming
+copy using `fetch()`.
+
+**Reason**: The browser uploads files via a presigned PUT URL, which writes to **real
+Cloudflare R2**.  In `wrangler dev`, the Worker's `BUCKET` binding reads/writes the
+**local simulation store** (`.wrangler/state/v3/r2/`), a completely separate backend.
+`BUCKET.get(r2IncomingKey)` returns `null` because the file only exists in real R2, not
+in the local sim.  The `if (obj)` guard then silently skips the copy, so
+`video/{id}.mp4` is never written anywhere.  Step 3 (extract-audio) then generates a
+presigned GET URL for `video/{id}.mp4`, the container tries to download it from real
+R2, and gets HTTP 404 — causing the workflow to fail and retry three times before
+erroring.
+
+**Fix**: Use `fetch(presignedGetUrl)` to read from real R2, then pipe the response
+`ReadableStream` body directly to `fetch(presignedPutUrl, { method: "PUT", body })`.
+The stream is not buffered in Worker memory, so file size is not a concern.  Both reads
+and writes now target real R2 in all environments, consistent with how the container
+steps operate.
+
+**General rule**: Any R2 data written outside the Worker (browser presigned upload,
+container presigned upload) must be read back via `fetch()` + presigned GET, not via
+the `BUCKET` binding, when running under `wrangler dev`.  The binding is only
+consistent with data written by the Worker binding itself in the same session.  See
+also the earlier ISSUE-18 entry for the same principle applied to the stream endpoint.
+
+---
+
 ## ISSUE-20: R2 CORS policy required for browser-to-R2 direct uploads
 
 **Decision**: Added `infra/r2-cors.json` and a `cors:set` npm script

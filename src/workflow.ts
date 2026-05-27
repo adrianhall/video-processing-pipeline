@@ -207,16 +207,55 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
 
           if (originalFormat === "mp4") {
             // -----------------------------------------------------------------
-            // Fast path: source is already MP4 — copy the R2 object directly.
+            // Fast path: source is already MP4 — stream-copy within R2 via
+            // presigned GET → presigned PUT, bypassing the ffmpeg container.
             //
-            // Using the BUCKET binding is free of egress charges and orders of
-            // magnitude faster than spinning up a container just to copy bytes.
-            // We only skip this path if `obj` is null (object was deleted between
-            // the upload and workflow start — highly unlikely but handled).
+            // We intentionally avoid BUCKET.get() + BUCKET.put() here.  In
+            // `wrangler dev`, the Worker BUCKET binding reads/writes the local
+            // simulation store (.wrangler/state/v3/r2/), while presigned URLs
+            // reach real Cloudflare R2.  The browser upload used a presigned
+            // PUT, so the file lives in real R2 — BUCKET.get() would return
+            // null and the copy would be silently skipped, causing every
+            // downstream step to fail with HTTP 404 on the GET.
+            //
+            // Using fetch() with presigned URLs guarantees the copy targets real
+            // R2 in both local dev and production.  The ReadableStream body is
+            // piped directly without buffering, so Worker memory usage is
+            // proportional to the streaming chunk size, not the file size.
+            //
+            // See docs/DECISIONS.md ISSUE-20 for full context.
             // -----------------------------------------------------------------
-            const obj = await this.env.BUCKET.get(r2IncomingKey);
-            if (obj) {
-              await this.env.BUCKET.put(outputKey, obj.body);
+            const inputUrl = await generatePresignedUrl(
+              this.env,
+              this.env.R2_BUCKET_NAME,
+              r2IncomingKey,
+              "GET",
+            );
+            const outputUrl = await generatePresignedUrl(
+              this.env,
+              this.env.R2_BUCKET_NAME,
+              outputKey,
+              "PUT",
+            );
+
+            const getResp = await fetch(inputUrl);
+            if (!getResp.ok) {
+              throw new Error(
+                `Fast-path copy: GET ${r2IncomingKey} returned HTTP ${getResp.status}`,
+              );
+            }
+            if (!getResp.body) {
+              throw new Error("Fast-path copy: GET response had no body");
+            }
+
+            const putResp = await fetch(outputUrl, {
+              method: "PUT",
+              body: getResp.body,
+            });
+            if (!putResp.ok) {
+              throw new Error(
+                `Fast-path copy: PUT ${outputKey} returned HTTP ${putResp.status}`,
+              );
             }
           } else {
             // -----------------------------------------------------------------
