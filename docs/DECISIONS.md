@@ -282,6 +282,27 @@ treat it as a property of type `string | number`, not a callable method.
 
 ---
 
+## ISSUE-18: R2 Secret Access Key must be the SHA-256 hash of the token value
+
+**Decision**: Changed `infra/outputs.tf` `r2_token_value` output from the raw `cloudflare_account_token.r2_token.value` to `sha256(cloudflare_account_token.r2_token.value)`.
+
+**Reason**: Cloudflare R2's S3-compatible API authenticates presigned URLs using AWS Signature Version 4. The credentials it expects are:
+
+- **Access Key ID**: the API token's `.id` field (hex string) — correct as-is.
+- **Secret Access Key**: the **SHA-256 hash** of the API token's `.value` field — NOT the raw value.
+
+The raw token value starts with `cfat_`, which is the Cloudflare API token bearer format. Using it directly as the signing secret means every HMAC-SHA256 computation in the AWS SDK produces a signature that does not match what R2 verifies, resulting in `403 SignatureDoesNotMatch` on every presigned PUT and GET request.
+
+This is documented at the [R2 authentication page](https://developers.cloudflare.com/r2/api/tokens/) under "Get S3 API credentials from an API token".
+
+**Discovery**: Smoke test failure — Test 2 (`PUT presigned R2 URL`) returned HTTP 403. The `cfat_` prefix in `R2_SECRET_ACCESS_KEY` (visible in `wrangler.jsonc`) was the tell. Confirmed by the R2 auth docs and [this Terraform blog post](https://blog.cyberjake.xyz/post/2024-03-19-cloudflare-r2-terraform/).
+
+**Fix**: `sha256(cloudflare_account_token.r2_token.value)` in `outputs.tf`. Terraform's `sha256()` function outputs a lowercase 64-character hex digest, which the AWS SDK uses as the signing key bytes. After running `npm run provision`, `wrangler.jsonc` will contain the correct hashed value in `R2_SECRET_ACCESS_KEY`.
+
+**Implication**: Any developer who provisioned before this fix will need to re-run `npm run provision` to regenerate `wrangler.jsonc` with the correct secret. No infrastructure is destroyed or recreated — only the Terraform output value changes.
+
+---
+
 ## ISSUE-18: Stream iframe URL derived from API response, not constructed from account ID
 
 **Decision**: The `stream_url` stored in D1 is derived from `data.result.preview.replace("/watch", "/iframe")` rather than constructed as `https://customer-${env.CF_ACCOUNT_ID}.cloudflarestream.com/${uid}/iframe`.

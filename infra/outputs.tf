@@ -56,8 +56,8 @@ output "r2_token_id" {
 }
 
 output "r2_token_value" {
-  description = "R2 API token value, used as the S3-compatible Secret Access Key for presigned URL generation."
-  value       = cloudflare_account_token.r2_token.value
+  description = "SHA-256 hash of the R2 API token value, used as the S3-compatible Secret Access Key for presigned URL generation. R2's S3-compatible API requires the hash, not the raw token value — see https://developers.cloudflare.com/r2/api/tokens/"
+  value       = sha256(cloudflare_account_token.r2_token.value)
   sensitive   = true
 }
 
