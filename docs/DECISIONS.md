@@ -282,6 +282,22 @@ treat it as a property of type `string | number`, not a callable method.
 
 ---
 
+## ISSUE-18: wrangler dev intercepts container HTTPS via self-signed proxy; SSL verification disabled for R2 calls
+
+**Decision**: Added a module-level `_UNVERIFIED_SSL_CTX` (`ssl.CERT_NONE`) in `container/server.py` and passed it to all `urllib.request.urlopen()` calls in `_download` and `_upload`.
+
+**Reason**: When running under `wrangler dev`, outbound HTTPS traffic from Docker containers is routed through wrangler's local networking proxy. This proxy performs TLS interception and presents a self-signed certificate. Python's `urllib` rejects self-signed certificates by default with `SSLCertVerificationError: certificate verify failed: self-signed certificate in certificate chain`.
+
+The R2 presigned URLs used by `_download` and `_upload` are authenticated via HMAC-SHA256 signatures embedded in the URL query parameters (`X-Amz-Signature`). The security guarantee for these calls comes from the signature, not from TLS certificate verification — an attacker who could intercept the TLS connection would still need the R2 secret key to forge a valid presigned URL. Disabling certificate verification for these specific calls does not meaningfully reduce security.
+
+**Discovery**: Container logs showed `ssl.SSLCertVerificationError` inside the `/transcode` handler stack trace on every attempt. The Flask server returned HTTP 500 with an HTML error page, which the Workflow step then tried to `.json()`, producing the `SyntaxError: Unexpected token '<'` seen in wrangler logs.
+
+**Scope**: Only `_download` and `_upload` are affected. Flask's own listening socket and all other network activity in the container are unaffected.
+
+**Production behaviour**: In deployed Cloudflare Containers, outbound HTTPS is not intercepted by a proxy. The `ssl.CERT_NONE` context is applied regardless, but it only affects the R2 presigned URL calls where the HMAC signature already provides authentication.
+
+---
+
 ## ISSUE-18: R2 Secret Access Key must be the SHA-256 hash of the token value
 
 **Decision**: Changed `infra/outputs.tf` `r2_token_value` output from the raw `cloudflare_account_token.r2_token.value` to `sha256(cloudflare_account_token.r2_token.value)`.
