@@ -134,13 +134,13 @@ The full backend pipeline and initial frontend upload flow are implemented.
 - `src/container.ts` — `FFmpegContainer` with lifecycle hooks and health-check fetch override
 - `scripts/pipeline-smoke-test.sh` — full end-to-end smoke test
 - `ui/` — React + Vite + Tailwind v4 + shadcn/ui (nova preset) project setup (ISSUE-19)
-- `ui/src/api.ts` — `createVideo()` and `startProcessing()` API client functions (ISSUE-20)
+- `ui/src/api.ts` — `createVideo()`, `startProcessing()`, `fetchVideos()` API client functions; `VideoStatus` and `VideoResource` types (ISSUE-20, ISSUE-21)
 - `ui/src/components/UploadZone.tsx` — drag-and-drop upload zone with XHR progress tracking (ISSUE-20)
+- `ui/src/components/VideoCard.tsx` — individual video status card with status badge mapping (ISSUE-21)
+- `ui/src/components/VideoList.tsx` — video dashboard grid with skeleton loading (ISSUE-21)
 
-### Not Yet Implemented (ISSUE-21+)
+### Not Yet Implemented (ISSUE-22+)
 
-- `ui/src/components/VideoList.tsx` — video dashboard with status polling (ISSUE-21)
-- `ui/src/components/VideoCard.tsx` — individual video status card (ISSUE-21)
 - `ui/src/components/VideoPlayer.tsx` — HTML5 `<video>` player wrapper (ISSUE-22)
 - Vitest config and test suite
 
