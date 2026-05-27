@@ -464,11 +464,12 @@ exist.  Since `public/` contains only generated content (ignored via
 `public/*` in `.gitignore`), the directory itself would not be cloned.  The
 `.gitkeep` placeholder solves this.
 
-**Behaviour after `npm run build`**: `public/.gitkeep` is deleted; `public/index.html`
-and `public/assets/` are created.  Running `git status` will show `.gitkeep` as
-deleted until `git checkout -- public/.gitkeep` restores it.  This is expected —
-the `prestart` script always rebuilds the SPA before `wrangler dev` starts, so
-`.gitkeep` is never needed at runtime.
+**Permanent fix (ISSUE-20)**: Added a `postbuild:ui` npm lifecycle hook
+(`shx touch public/.gitkeep`) to `package.json`.  npm runs `postbuild:ui`
+automatically after every `build:ui` invocation — whether called directly
+(`npm run build:ui`) or via `run-s build:*` — so `.gitkeep` is always recreated
+immediately after Vite's `emptyOutDir` sweep.  `git status` no longer shows a
+dirty working tree after a build.
 
 **`!public/.gitkeep` negation**: Uses the `public/*` glob pattern (not the
 directory pattern `public/`) so that git can traverse into `public/` and the

@@ -19,6 +19,7 @@
     "test:coverage": "vitest run --coverage",
     "build": "run-s build:*",
     "build:ui": "cd ui && npm run build",
+    "postbuild:ui": "shx touch public/.gitkeep",
     "prebuild:worker": "npm run generate:types",
     "build:worker": "tsc -b src --noEmit",
     "preprovision": "terraform -chdir=infra init",
