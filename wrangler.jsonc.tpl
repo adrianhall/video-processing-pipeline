@@ -64,14 +64,33 @@
     }
   ],
 
-  // Container binding for the ffmpeg processing container.
+  // Container configuration for the ffmpeg processing container.
   // class_name must match the class exported from src/container.ts.
-  // image points to the Dockerfile in the container/ directory.
+  // image points to the Dockerfile; the binding name lives in durable_objects below.
   "containers": [
     {
-      "binding": "FFMPEG_CONTAINER",
       "class_name": "FFmpegContainer",
-      "image": "./container"
+      "image": "./container/Dockerfile"
+    }
+  ],
+
+  // Durable Object binding that exposes the container class to Worker code as
+  // env.FFMPEG_CONTAINER. The class_name must match the containers entry above.
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "FFMPEG_CONTAINER",
+        "class_name": "FFmpegContainer"
+      }
+    ]
+  },
+
+  // DO migrations: registers FFmpegContainer as a SQLite-backed class.
+  // new_sqlite_classes is required for Container-backed Durable Objects.
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["FFmpegContainer"]
     }
   ]
 }
