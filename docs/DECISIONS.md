@@ -272,6 +272,16 @@ treat it as a property of type `string | number`, not a callable method.
 
 ---
 
+## ISSUE-15: biome.json `.wrangler` exclusion pattern corrected for biome v2.2+
+
+**Decision**: Changed the `files.includes` exclusion pattern from `!**/.wrangler/` to `!.wrangler` in `biome.json`.
+
+**Reason**: In biome v2.2.0+, the trailing `/**` suffix is no longer required to exclude a directory and all its descendants — using it triggers a new `lint/suspicious/useBiomeIgnoreFolder` warning. Additionally, the older pattern `!**/.wrangler/` (with a trailing slash) was found to not correctly exclude the contents of the `.wrangler/tmp/` directory in practice; biome was scanning generated wrangler build artefacts (`.wrangler/tmp/**/*.js`) and reporting hundreds of lint errors from third-party bundled code.
+
+**Discovery**: The `.wrangler/tmp/` directory had been populated by a prior `wrangler dev` run. The exclusion bug was latent until those temp files existed. The corrected pattern `!.wrangler` excludes the root-level `.wrangler` directory and all its contents as of biome v2.2.0.
+
+---
+
 ## ISSUE-01/02: check:markdown scope narrowed to docs/**/*.md
 
 **Decision**: The `check:markdown` script was changed from `'**/*.md' '#node_modules'` to `'docs/**/*.md' '#node_modules'` (by the operator, during ISSUE-02 execution).

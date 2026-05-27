@@ -23,7 +23,7 @@
       "!**/node_modules/",
       "!**/public/",
       "!**/infra/",
-      "!**/.wrangler/",
+      "!.wrangler",
       "!**/container/",
       "!worker-configuration.d.ts"
     ]

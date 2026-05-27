@@ -9,6 +9,7 @@
  *
  *  1. **Register** — flip the D1 status to `"processing"` so the UI updates immediately.
  *  2. **Transcode** — normalise the upload to MP4 / H.264 + AAC via the ffmpeg container.
+ *     If the source file is already MP4, the file is copied directly in R2 (no container call).
  *  3. **Extract audio** — pull the audio track to a standalone MP3 file in R2.
  *  4. **Grayscale** — re-encode the MP4 with `format=gray` while keeping the audio.
  *  5. **Upload to Stream** — ingest the grayscale MP4 into Cloudflare Stream via the
@@ -25,9 +26,9 @@
  *
  * ## Current state
  *
- * Step 1 is fully implemented. Steps 2–6 are scaffolded as clearly-labelled
+ * Steps 1 and 2 are fully implemented. Steps 3–6 are scaffolded as clearly-labelled
  * placeholder comments that describe what each step will do and which R2 keys it
- * reads / writes. They will be filled in by ISSUE-15 through ISSUE-18.
+ * reads / writes. They will be filled in by ISSUE-16 through ISSUE-18.
  *
  * @module workflow
  */
@@ -37,7 +38,30 @@ import {
   type WorkflowEvent,
   type WorkflowStep,
 } from "cloudflare:workers";
+import { generatePresignedUrl } from "./lib/presigned";
 import type { VideoWorkflowParams } from "./types";
+
+/**
+ * JSON response shape returned by all ffmpeg container processing endpoints
+ * (`POST /transcode`, `POST /extract-audio`, `POST /grayscale`).
+ *
+ * The container always returns one of two shapes:
+ * - **Success** (`ok: true`): includes the wall-clock duration of the ffmpeg invocation.
+ * - **Failure** (`ok: false`): includes a short error summary and the last 2 000
+ *   characters of ffmpeg stderr for debugging.
+ *
+ * @example
+ * ```ts
+ * const result = await resp.json<ContainerResult>();
+ * if (!result.ok) {
+ *   throw new Error(`Processing failed: ${result.error}`);
+ * }
+ * console.log(`Done in ${result.duration_seconds}s`);
+ * ```
+ */
+type ContainerResult =
+  | { ok: true; duration_seconds: number }
+  | { ok: false; error: string; stderr?: string };
 
 /**
  * Multi-step workflow that processes an uploaded video from raw format through
@@ -124,9 +148,7 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
     //   originalFormat — used in Step 2 to decide whether transcoding is needed.
     //   r2IncomingKey  — used in Step 2 (transcode input) and Step 6 (cleanup).
     //
-    // filename, originalFormat, and r2IncomingKey are referenced in the placeholder
-    // step comments below and will be wired up in ISSUE-15 through ISSUE-18.
-    // biome-ignore lint/correctness/noUnusedVariables: used in Steps 2–6 (ISSUE-15–18)
+    // biome-ignore lint/correctness/noUnusedVariables: filename is used in Step 5 (ISSUE-18)
     const { videoId, filename, originalFormat, r2IncomingKey } = event.payload;
 
     try {
@@ -148,24 +170,107 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
       });
 
       // =======================================================================
-      // STEP 2: Transcode to MP4  (ISSUE-15)
+      // STEP 2: Transcode to MP4
       // =======================================================================
       // Purpose: Normalise the raw upload to a well-formed MP4 with H.264 video
       // and AAC audio so that every downstream step works with a consistent format.
-      // Files already in MP4 with the right codecs skip transcoding (fast path).
       //
-      // How it works:
-      //  1. The workflow generates a presigned GET URL for r2IncomingKey.
-      //  2. The workflow generates a presigned PUT URL for "video/{videoId}.mp4".
-      //  3. The workflow calls POST /transcode on the FFmpegContainer instance,
-      //     passing both URLs.  The container downloads, re-encodes, and uploads
-      //     — the Worker never sees the raw bytes.
+      // Fast-path optimisation: if the incoming file is already MP4, we copy it
+      // directly within R2 using the BUCKET binding — no container startup, no
+      // network round-trip, no re-encoding.  This is a common case (many screen
+      // recordings and phone uploads are already MP4) and avoids unnecessary cost.
+      //
+      // For all other formats (mkv, webm, mov, avi, …):
+      //  1. Generate a presigned GET URL for the raw incoming file.
+      //  2. Generate a presigned PUT URL for the normalised output key.
+      //  3. Call POST /transcode on the per-video FFmpegContainer instance,
+      //     passing both URLs as JSON.  The container downloads, re-encodes with
+      //     `ffmpeg -c:v libx264 -c:a aac`, and uploads — the Worker never sees
+      //     the raw video bytes (which would exhaust the 128 MB memory limit).
+      //
+      // The step is retried up to 3 times with a 10-second delay between
+      // attempts, which gives the container time to recover from transient errors
+      // such as a cold-start timeout or a brief R2 network hiccup.
       //
       // D1 status while running: "transcoding"
-      // Input:  r2IncomingKey         (e.g. "incoming/{videoId}.{originalFormat}")
-      // Output: "video/{videoId}.mp4" (stored as r2_video_key in D1)
-      //
-      // TODO (ISSUE-15): await step.do("transcode", async () => { … });
+      // Input:  r2IncomingKey                (e.g. "incoming/{videoId}.{ext}")
+      // Output: `video/{videoId}.mp4`        (stored as r2_video_key in D1)
+      await step.do(
+        "transcode",
+        { retries: { limit: 3, delay: "10 seconds" } },
+        async () => {
+          // Mark the video as actively transcoding so the UI reflects the current
+          // pipeline stage immediately, even before the container is warm.
+          await this.env.DB.prepare(
+            "UPDATE videos SET status = ?, updated_at = ? WHERE id = ?",
+          )
+            .bind("transcoding", new Date().toISOString(), videoId)
+            .run();
+
+          // Compute the output key once — used for both the presigned PUT URL
+          // and the final D1 update.
+          const outputKey = `video/${videoId}.mp4`;
+
+          if (originalFormat === "mp4") {
+            // -----------------------------------------------------------------
+            // Fast path: source is already MP4 — copy the R2 object directly.
+            //
+            // Using the BUCKET binding is free of egress charges and orders of
+            // magnitude faster than spinning up a container just to copy bytes.
+            // We only skip this path if `obj` is null (object was deleted between
+            // the upload and workflow start — highly unlikely but handled).
+            // -----------------------------------------------------------------
+            const obj = await this.env.BUCKET.get(r2IncomingKey);
+            if (obj) {
+              await this.env.BUCKET.put(outputKey, obj.body);
+            }
+          } else {
+            // -----------------------------------------------------------------
+            // Slow path: non-MP4 format — transcode via the ffmpeg container.
+            //
+            // Each video has its own named container instance so multiple videos
+            // can transcode in parallel without serialisation.  getByName() is
+            // idempotent — calling it twice for the same name returns the same
+            // underlying instance.
+            // -----------------------------------------------------------------
+            const inputUrl = await generatePresignedUrl(
+              this.env,
+              this.env.R2_BUCKET_NAME,
+              r2IncomingKey,
+              "GET",
+            );
+            const outputUrl = await generatePresignedUrl(
+              this.env,
+              this.env.R2_BUCKET_NAME,
+              outputKey,
+              "PUT",
+            );
+
+            const container = this.env.FFMPEG_CONTAINER.getByName(videoId);
+            const resp = await container.fetch("http://container/transcode", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                input_url: inputUrl,
+                output_url: outputUrl,
+              }),
+            });
+
+            const result = await resp.json<ContainerResult>();
+            if (!result.ok) {
+              throw new Error(`Transcode failed: ${result.error}`);
+            }
+          }
+
+          // Record the output key so downstream steps (extract-audio, grayscale)
+          // and the UI (VideoCard) can reference the transcoded file.
+          await this.env.DB.prepare(
+            "UPDATE videos SET r2_video_key = ?, updated_at = ? WHERE id = ?",
+          )
+            .bind(outputKey, new Date().toISOString(), videoId)
+            .run();
+        },
+      );
 
       // =======================================================================
       // STEP 3: Extract audio to MP3  (ISSUE-16)
