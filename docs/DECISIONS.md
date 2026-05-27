@@ -476,6 +476,36 @@ negation takes effect.  See ISSUE-06 decisions for the rationale.
 
 ---
 
+## ISSUE-20: R2 CORS policy required for browser-to-R2 direct uploads
+
+**Decision**: Added `infra/r2-cors.json` and a `cors:set` npm script
+(`wrangler r2 bucket cors set`). The `postprovision` hook now runs the CORS set
+automatically after `generate-wrangler`.
+
+**Reason**: Browser XHR PUT requests to the presigned R2 URL fail with
+`No 'Access-Control-Allow-Origin' header` because R2 has no CORS policy by
+default. The Cloudflare Terraform provider v5 **cannot configure R2 CORS** —
+the provider docs explicitly state "To configure items such as CORS and object
+lifecycles, you will need to use the AWS Provider." Wrangler CLI is the simpler
+alternative for this project.
+
+**Policy details** (`infra/r2-cors.json`):
+
+- `AllowedOrigins: ["*"]` — wildcard is acceptable here because the actual
+  security guarantee comes from the presigned URL's HMAC-SHA256 signature, not
+  the origin. A production deployment should narrow this to the Worker's domain.
+- `AllowedMethods: ["PUT"]` — only the upload operation needs cross-origin access.
+- `AllowedHeaders: ["*"]` — allows `Content-Type`, `Content-Length`, and any
+  other headers the browser sets on the XHR upload.
+- `MaxAgeSeconds: 3600` — browsers cache the preflight response for one hour.
+
+**Implication**: Any developer who provisions the infrastructure must also run
+`npm run cors:set` (or re-run `npm run provision` which triggers it automatically
+via `postprovision`) to apply the CORS policy to the bucket. Without this, all
+browser-based uploads return "Upload network error".
+
+---
+
 ## ISSUE-01/02: check:markdown scope narrowed to docs/**/*.md
 
 **Decision**: The `check:markdown` script was changed from `'**/*.md' '#node_modules'` to `'docs/**/*.md' '#node_modules'` (by the operator, during ISSUE-02 execution).
