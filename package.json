@@ -5,6 +5,7 @@
   "license": "MIT",
   "private": true,
   "scripts": {
+    "generate:types": "node scripts/generate-types.js",
     "check": "run-s check:*",
     "check:biome": "biome check .",
     "check:infra": "terraform -chdir=infra validate",
@@ -17,16 +18,18 @@
     "test:coverage": "vitest run --coverage",
     "build": "run-s build:*",
     "build:ui": "echo 'no ui yet'",
+    "prebuild:worker": "node scripts/generate-types.js",
+    "build:worker": "tsc -b src --noEmit",
     "preprovision": "terraform -chdir=infra init",
     "provision": "terraform -chdir=infra apply -auto-approve",
     "postprovision": "generate-wrangler -cf -t infra",
     "teardown": "terraform -chdir=infra destroy -auto-approve",
     "postteardown": "shx rm -f wrangler.jsonc",
-    "predeploy": "run-s build db:migrate:remote",
+    "predeploy": "run-s generate:types build db:migrate:remote",
     "deploy": "wrangler deploy",
     "db:migrate:remote": "wrangler d1 migrations apply video-pipeline-db",
     "db:migrate:local": "wrangler d1 migrations apply video-pipeline-db --local",
-    "prestart": "run-s build db:migrate:local",
+    "prestart": "run-s generate:types build db:migrate:local",
     "start": "wrangler dev"
   },
   "devDependencies": {
