@@ -117,9 +117,9 @@ video-processing-pipeline/
 
 ## Current Implementation Status
 
-### Completed (ISSUE-01 through ISSUE-18)
+### Completed (ISSUE-01 through ISSUE-20)
 
-The full backend pipeline is implemented and smoke-tested end-to-end.
+The full backend pipeline and initial frontend upload flow are implemented.
 
 - Root `package.json`, Biome, TypeScript project references
 - `infra/` — Worker, D1, R2, R2 API token (Terraform v5)
@@ -133,10 +133,15 @@ The full backend pipeline is implemented and smoke-tested end-to-end.
 - `src/workflow.ts` — `VideoProcessingWorkflow` (5 steps: register, transcode, extract-audio, grayscale, finalize)
 - `src/container.ts` — `FFmpegContainer` with lifecycle hooks and health-check fetch override
 - `scripts/pipeline-smoke-test.sh` — full end-to-end smoke test
+- `ui/` — React + Vite + Tailwind v4 + shadcn/ui (nova preset) project setup (ISSUE-19)
+- `ui/src/api.ts` — `createVideo()` and `startProcessing()` API client functions (ISSUE-20)
+- `ui/src/components/UploadZone.tsx` — drag-and-drop upload zone with XHR progress tracking (ISSUE-20)
 
-### Not Yet Implemented (ISSUE-19+)
+### Not Yet Implemented (ISSUE-21+)
 
-- React UI: Vite setup, components, API client (ISSUE-19 through ISSUE-23)
+- `ui/src/components/VideoList.tsx` — video dashboard with status polling (ISSUE-21)
+- `ui/src/components/VideoCard.tsx` — individual video status card (ISSUE-21)
+- `ui/src/components/VideoPlayer.tsx` — HTML5 `<video>` player wrapper (ISSUE-22)
 - Vitest config and test suite
 
 ---
