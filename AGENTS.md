@@ -38,7 +38,8 @@ A video-processing pipeline built on the Cloudflare developer platform. Users
 upload videos via a drag-and-drop web interface. A Cloudflare Workflow
 orchestrates multi-step processing (format detection, transcoding, audio
 extraction, grayscale conversion) using an ffmpeg Container. The final grayscale
-video is uploaded to Cloudflare Stream for playback.
+MP4 is stored in R2 and served for browser playback via an authenticated Worker
+streaming endpoint.
 
 This is example code for a blog article about **Cloudflare Workflows**. The
 Workflow implementation must remain simple, linear, and thoroughly documented.
@@ -55,7 +56,7 @@ Workflow implementation must remain simple, linear, and thoroughly documented.
 | Object storage | Cloudflare R2 |
 | Orchestration | Cloudflare Workflows |
 | Video processing | Cloudflare Containers + ffmpeg (Python/Flask) |
-| Video delivery | Cloudflare Stream |
+| Video delivery | R2 via Worker streaming endpoint (`GET /api/videos/:id/stream`) |
 | Frontend | React 18 + Vite + Tailwind CSS v4 + shadcn/ui |
 | Linting/Formatting | Biome (replaces ESLint + Prettier) |
 | Script composition | npm-run-all2 (`run-s`) |
@@ -76,7 +77,9 @@ video-processing-pipeline/
 ├── wrangler.jsonc            # Generated config (gitignored)
 │
 ├── container/
-│   └── Dockerfile            # Placeholder stub; replaced by ffmpeg issue
+│   ├── Dockerfile            # ffmpeg + gunicorn container image
+│   ├── server.py             # Flask HTTP wrapper (POST /transcode, /extract-audio, /grayscale)
+│   └── requirements.txt      # Python dependencies
 │
 ├── docs/
 │   ├── PLAN.md               # Full architecture and design decisions
@@ -96,36 +99,44 @@ video-processing-pipeline/
 │
 ├── src/                      # Worker TypeScript (Hono API + Workflow + Container)
 │   ├── tsconfig.json         # composite: true, Workers types
-│   └── index.ts              # Entry point (stub — see implementation issues)
+│   ├── index.ts              # Entry point — Hono app + auth middleware
+│   ├── types.ts              # Shared types (VideoStatus, VideoResource, etc.)
+│   ├── workflow.ts           # VideoProcessingWorkflow (5 steps)
+│   ├── container.ts          # FFmpegContainer Durable Object
+│   ├── api/
+│   │   └── videos.ts         # ALL /api/videos routes in one file (see routing note)
+│   └── lib/
+│       └── presigned.ts      # R2 S3 presigned URL helper
 │
-└── ui/                       # React SPA (Vite)
+└── ui/                       # React SPA (Vite — implemented ISSUE-19 onwards)
     ├── tsconfig.json
-    └── src/                  # Components, API client (not yet implemented)
+    └── src/                  # Components, API client
 ```
 
 ---
 
 ## Current Implementation Status
 
-### Completed (ISSUE-01 through ISSUE-04)
+### Completed (ISSUE-01 through ISSUE-18)
 
-- Root `package.json` with all orchestration scripts
-- Biome config, TypeScript project references
-- `infra/` — Terraform resources provisioned (Worker, D1, R2, API tokens)
+The full backend pipeline is implemented and smoke-tested end-to-end.
+
+- Root `package.json`, Biome, TypeScript project references
+- `infra/` — Worker, D1, R2, R2 API token (Terraform v5)
 - `wrangler.jsonc.tpl` — full bindings template
 - `migrations/0001_init.sql` — `videos` table schema
-- `container/Dockerfile` — placeholder stub (Python health server)
-- `src/index.ts` — minimal Worker stub (returns `"OK"`)
+- `container/` — full ffmpeg + Flask server (`/transcode`, `/extract-audio`, `/grayscale`)
+- `src/index.ts` — Hono app + Cloudflare Access auth middleware
+- `src/types.ts` — `VideoStatus`, `VideoResource`, `VideoWorkflowParams`, etc.
+- `src/lib/presigned.ts` — R2 S3 presigned URL helper
+- `src/api/videos.ts` — ALL `/api/videos` routes (upload, CRUD, stream, status)
+- `src/workflow.ts` — `VideoProcessingWorkflow` (5 steps: register, transcode, extract-audio, grayscale, finalize)
+- `src/container.ts` — `FFmpegContainer` with lifecycle hooks and health-check fetch override
+- `scripts/pipeline-smoke-test.sh` — full end-to-end smoke test
 
-### Not Yet Implemented (ISSUE-05+)
+### Not Yet Implemented (ISSUE-19+)
 
-- Hono app setup with auth middleware (`src/index.ts`)
-- Shared TypeScript types (`src/types.ts`)
-- API routes: upload, videos CRUD, workflow status (`src/api/`)
-- Presigned URL helper (`src/lib/presigned.ts`)
-- ffmpeg container: Dockerfile, Flask server, `FFmpegContainer` class
-- `VideoProcessingWorkflow` class (`src/workflow.ts`)
-- React UI: components, API client, Vite config
+- React UI: Vite setup, components, API client (ISSUE-19 through ISSUE-23)
 - Vitest config and test suite
 
 ---
@@ -230,6 +241,75 @@ in TypeScript).
 Files are uploaded **directly from the browser to R2** via presigned PUT URLs.
 The Worker never proxies the file body (Workers has a 100 MB body limit).
 
+### Hono Route Ordering
+
+**All `/api/videos` routes live in a single file** (`src/api/videos.ts`).
+Do not split them across multiple routers mounted at the same prefix — Hono
+v4 uses first-match routing and a `GET /:id` registered in one sub-router
+will shadow `GET /:id/stream` in a later sub-router before it is evaluated.
+
+Within the file, routes with literal suffixes **must** be registered before
+the bare parameter catch:
+
+```typescript
+// CORRECT — most specific first
+videosRouter.get("/:id/status", ...);  // registered before /:id
+videosRouter.get("/:id/stream", ...);  // registered before /:id
+videosRouter.get("/:id", ...);         // bare catch — LAST
+```
+
+Reversing this order causes `GET /api/videos/{id}/stream` to match `/:id`
+with `id = "{uuid}/stream"`, which Hono resolves as a 404.
+
+### wrangler dev R2 Storage Split
+
+In `wrangler dev` (local mode, the default for `npm start`), R2 bindings and
+presigned-URL `fetch()` calls use **separate storage backends**:
+
+| Access method | Backend |
+|---|---|
+| `BUCKET.get()` / `BUCKET.put()` Worker binding | Local simulation (`.wrangler/state/v3/r2/`) |
+| `fetch()` with presigned R2 URL from Worker code | Real Cloudflare R2 |
+| ffmpeg container presigned PUT/GET | Real Cloudflare R2 (via Docker networking) |
+
+**Rule**: Any file written to real R2 by the ffmpeg container (e.g.
+`bwvideo/{id}.mp4`) must be read back with `fetch(presignedGetUrl)`, not
+`BUCKET.get()`. The binding will always return `null` for container-written
+files in local dev. See `src/api/videos.ts` `GET /:id/stream` for the
+reference implementation.
+
+The same split applies to D1: data written by the Worker in local mode lives
+in `.wrangler/state/v3/d1/`, not the remote Cloudflare D1. When running the
+smoke test against a local dev server, use `D1_LOCAL=1` (the script
+auto-detects this when `BASE` contains `localhost`).
+
+### R2 S3 Credentials
+
+The R2 S3-compatible API requires credentials in a specific format (see
+`docs/DECISIONS.md` ISSUE-18 for full details):
+
+- **Access Key ID** — `cloudflare_account_token.id` (the token UUID as-is)
+- **Secret Access Key** — **`sha256(cloudflare_account_token.value)`** — the
+  64-character hex SHA-256 digest of the raw `cfat_…` value, NOT the raw
+  value itself
+
+Using the raw `cfat_…` value as the secret produces wrong HMAC signatures
+and every presigned URL returns HTTP 403. In `infra/outputs.tf`:
+`value = sha256(cloudflare_account_token.r2_token.value)`.
+
+### wrangler dev Container HTTPS Proxy
+
+When `wrangler dev` starts, a `cloudflare/proxy-everything` sidecar container
+intercepts **all outbound TCP** from Docker containers (including HTTPS) and
+routes it through wrangler's local simulation using a self-signed TLS
+certificate. Python's `urllib` rejects this by default.
+
+The fix in `container/server.py`: `_UNVERIFIED_SSL_CTX = ssl.create_default_context()` with `CERT_NONE`, passed to every `urllib.request.urlopen()` call. This is safe for R2 presigned URLs because their security comes from HMAC signatures, not TLS certificate chains.
+
+This does **not** affect the Worker's own `fetch()` calls — the Worker runs
+in wrangler's Node.js process, not in Docker, so it reaches real HTTPS
+endpoints directly.
+
 ---
 
 ## Infrastructure Notes
@@ -239,13 +319,18 @@ The Worker never proxies the file body (Workers has a 100 MB body limit).
 - **Worker**: `video-pipeline-worker`
 - **D1**: `video-pipeline-db` (with `read_replication = { mode = "disabled" }`)
 - **R2**: `video-pipeline-bucket`
-- **API tokens**: R2 token (R2 Storage Write), Stream token (Stream Write)
+- **API tokens**: R2 token only (R2 Storage Write) — Stream token removed
 
 ### Token Strategy
 
-API tokens for R2 and Stream are created by Terraform and passed as plaintext
-`vars` in `wrangler.jsonc`. This is a deliberate demo convenience — a
-production system would use `wrangler secret put` or Secrets Store.
+The R2 API token is created by Terraform and passed as plaintext `vars` in
+`wrangler.jsonc`. This is a deliberate demo convenience — a production system
+would use `wrangler secret put` or Secrets Store.
+
+The R2 token provides two values:
+
+- `R2_ACCESS_KEY_ID` = `r2_token.id` (token UUID)
+- `R2_SECRET_ACCESS_KEY` = `sha256(r2_token.value)` ← SHA-256 hash, not raw value
 
 ### Permission Groups Lookup
 
@@ -283,6 +368,10 @@ before implementing any issue.** Key entries:
   `durable_objects.bindings`; `migrations.new_sqlite_classes` is required
 - **ISSUE-04**: `container/Dockerfile` is a placeholder stub added early to
   unblock `wrangler` config validation; it will be replaced
+- **ISSUE-18**: R2 Secret Access Key must be `sha256(token.value)` — raw `cfat_…` value produces 403
+- **ISSUE-18**: Cloudflare Stream replaced by direct R2 playback — `GET /api/videos/:id/stream`
+- **ISSUE-18**: wrangler dev local R2 binding and real R2 are separate stores
+- **ISSUE-18**: wrangler dev intercepts container HTTPS via `cloudflare/proxy-everything` self-signed proxy
 
 ---
 
@@ -319,7 +408,7 @@ Types: `feat` (new functionality), `fix`, `chore` (scaffolding/config),
 ## Skills
 
 Load the skills in `docs/SKILLS.md` at the start of every issue. The full
-list as of ISSUE-04:
+list as of ISSUE-18:
 
 `cloudflare`, `cloudflare-auth`, `cloudflare-scripts`, `durable-objects`,
 `react-modernization`, `react-state-management`, `shadcn`,
@@ -341,3 +430,22 @@ After any change, verify:
 2. `npm run build` — no errors or significant warnings
 3. If `wrangler.jsonc` exists: `npm run db:migrate:local` — migration applied
 4. If `wrangler.jsonc` exists: `wrangler dev` starts without config errors
+
+### Full Pipeline Smoke Test
+
+Run after `npm start` is running against real bindings
+(`wrangler.jsonc` must exist — run `npm run provision` first):
+
+```bash
+bash scripts/pipeline-smoke-test.sh demo-videos/test-3.webm
+```
+
+The script auto-detects local vs remote D1 from the `BASE` URL.
+All 9 numbered checks must print `PASS` and the final line must be
+`All pipeline smoke tests passed.`
+
+Three demo videos exercise different code paths:
+
+- `test-3.webm` — WebM → full container pipeline (fastest, 2.3 MB)
+- `test-1.mp4` — MP4 fast-path bypass (no container transcoding)
+- `test-2.avi` — AVI → full container pipeline (stress-tests under load)
