@@ -57,8 +57,16 @@ set -euo pipefail
 BASE="${BASE:-http://localhost:8787}"
 POLL_TIMEOUT="${POLL_TIMEOUT:-300}"
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
-D1_LOCAL="${D1_LOCAL:-0}"
 VIDEO_FILE="${VIDEO_FILE:-${1:-}}"
+
+# Default D1_LOCAL to 1 when BASE is localhost (wrangler dev local mode keeps
+# data in the local D1 simulation, not the remote Cloudflare D1 database).
+# Override with D1_LOCAL=0 to query the remote database instead.
+if [[ "$BASE" == *"localhost"* ]]; then
+  D1_LOCAL="${D1_LOCAL:-1}"
+else
+  D1_LOCAL="${D1_LOCAL:-0}"
+fi
 
 # ---------------------------------------------------------------------------
 # Pre-flight checks
