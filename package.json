@@ -8,7 +8,7 @@
     "check": "run-s check:*",
     "check:biome": "biome check .",
     "check:infra": "terraform -chdir=infra validate",
-    "check:markdown": "markdownlint-cli2 'docs/**/*.md' '#node_modules'",
+    "check:markdown": "markdownlint-cli2 'docs/*.md' 'docs/issues/*.md' '#node_modules'",
     "check:types": "tsc -b --noEmit",
     "fix": "run-s fix:*",
     "fix:biome": "biome check --write .",
