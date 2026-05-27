@@ -218,6 +218,29 @@ command so the generated types file is removed alongside `wrangler.jsonc` on tea
 
 ---
 
+## ISSUE-07: Added `R2_BUCKET_NAME` var to `wrangler.jsonc.tpl`
+
+**Decision**: Added `"R2_BUCKET_NAME": "{{r2_bucket_name}}"` to the `vars` block
+in `wrangler.jsonc.tpl` and to the committed `worker-configuration.d.ts`.
+
+**Reason**: `generatePresignedUrl` accepts `bucket: string` as an explicit
+parameter — the R2 binding cannot be introspected for its name, so the caller
+must supply it.  Without an env var, callers in ISSUE-08 and later workflow
+steps would have to hardcode `"video-pipeline-bucket"`, which makes the project
+brittle if the bucket is renamed and couples application code to infrastructure
+details.  The `r2_bucket_name` Terraform output already exists and the
+`{{r2_bucket_name}}` placeholder is already used in the `r2_buckets` binding; a
+one-line addition to `vars` eliminates the hardcoding risk with zero extra
+infrastructure cost.
+
+**Implication**: After `npm run provision`, `wrangler.jsonc` will include
+`R2_BUCKET_NAME` in `vars`, and `npm run generate:types` will regenerate
+`worker-configuration.d.ts` with the real bucket name.  Callers of
+`generatePresignedUrl` should use `env.R2_BUCKET_NAME` as the `bucket`
+argument.
+
+---
+
 ## ISSUE-01/02: check:markdown scope narrowed to docs/**/*.md
 
 **Decision**: The `check:markdown` script was changed from `'**/*.md' '#node_modules'` to `'docs/**/*.md' '#node_modules'` (by the operator, during ISSUE-02 execution).

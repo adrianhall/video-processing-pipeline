@@ -20,6 +20,7 @@
   "vars": {
     "CLOUDFLARE_TEAM_DOMAIN": "{{team_domain}}",
     "CF_ACCOUNT_ID": "{{account_id}}",
+    "R2_BUCKET_NAME": "{{r2_bucket_name}}",
     "R2_ACCESS_KEY_ID": "{{r2_token_id}}",
     "R2_SECRET_ACCESS_KEY": "{{r2_token_value}}",
     "CF_API_TOKEN": "{{stream_token_value}}"
