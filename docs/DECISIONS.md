@@ -241,6 +241,37 @@ argument.
 
 ---
 
+## ISSUE-13: `defaultPort` and `sleepAfter` are properties, not methods
+
+**Decision**: Implemented `defaultPort` and `sleepAfter` as class property
+assignments (`override defaultPort = 8080` and `override sleepAfter = 60`)
+rather than as overridden methods (`defaultPort(): number` and
+`sleepAfter(): number`) as shown in the issue's example code.
+
+**Reason**: The `@cloudflare/containers` package (v0.3.5) declares both as
+instance properties on the `Container` base class:
+
+```ts
+defaultPort?: number;
+sleepAfter: string | number;
+```
+
+Implementing them as methods (`defaultPort(): number`) would assign function
+values to `number` properties, causing a TypeScript type error under
+`strict: true`. The Containers API is in beta and the issue itself notes that
+"the exact base class and method signatures may change." Inspecting the
+installed `node_modules/@cloudflare/containers/dist/lib/container.d.ts`
+confirmed the property-based API.
+
+The `sleepAfter` property accepts either a `number` (seconds) or a `string`
+(e.g. `"1m"`, `"30s"`). ISSUE-13 specifies 60 seconds, so `sleepAfter = 60`
+is used.
+
+**Implication**: Any future code referencing `container.sleepAfter` should
+treat it as a property of type `string | number`, not a callable method.
+
+---
+
 ## ISSUE-01/02: check:markdown scope narrowed to docs/**/*.md
 
 **Decision**: The `check:markdown` script was changed from `'**/*.md' '#node_modules'` to `'docs/**/*.md' '#node_modules'` (by the operator, during ISSUE-02 execution).

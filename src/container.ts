@@ -3,15 +3,11 @@
  *
  * `FFmpegContainer` wraps a Docker container that runs a Python/Flask HTTP
  * server exposing three ffmpeg endpoints: `/transcode`, `/extract-audio`, and
- * `/grayscale`. The `VideoProcessingWorkflow` calls these endpoints by
- * generating presigned R2 URLs and POSTing them to the container.
+ * `/grayscale`. The `VideoProcessingWorkflow` calls these endpoints via the
+ * DO networking layer, passing presigned R2 URLs so the container can
+ * download input and upload output without streaming through the Worker.
  *
- * This file is a **stub** — only the class declaration and the `defaultPort`
- * are set here so Wrangler can validate the Worker entry point. The full
- * implementation (Flask server, ffmpeg logic, sleepAfter, health checks) will
- * be added in the container implementation issue.
- *
- * ## Wrangler config requirements (already present in wrangler.jsonc.tpl)
+ * ## Wrangler config requirements (present in wrangler.jsonc.tpl)
  * - `containers[].class_name` = `"FFmpegContainer"`
  * - `durable_objects.bindings[].name` = `"FFMPEG_CONTAINER"`
  * - `migrations[].new_sqlite_classes` includes `"FFmpegContainer"`
@@ -34,9 +30,10 @@ import { Container } from "@cloudflare/containers";
  * await stub.fetch(new Request("http://container/transcode", { ... }));
  * ```
  *
- * The container listens on port 8080 (Flask default). The `VideoProcessing-
- * Workflow` reaches it via `stub.fetch()` which Cloudflare routes through the
- * DO networking layer to the running container.
+ * The container listens on port 8080 (Flask default). `sleepAfter = 60`
+ * means the container shuts down automatically after 60 seconds with no
+ * incoming requests, keeping idle costs low while still being warm enough
+ * for the typical multi-step workflow that sequences calls within seconds.
  *
  * @example
  * ```ts
@@ -44,6 +41,8 @@ import { Container } from "@cloudflare/containers";
  * const stub = env.FFMPEG_CONTAINER.get(
  *   env.FFMPEG_CONTAINER.idFromName(videoId)
  * );
+ * // Wait for the container to be ready, then call an endpoint
+ * await stub.startAndWaitForPorts();
  * const res = await stub.fetch(
  *   new Request("http://container/health")
  * );
@@ -53,7 +52,19 @@ export class FFmpegContainer extends Container<Env> {
   /**
    * Port that the Flask HTTP server inside the container listens on.
    * Must match the `EXPOSE` directive in `container/Dockerfile` and the
-   * Flask `app.run(port=…)` call in `container/server.py`.
+   * `app.run(port=8080)` call in `container/server.py`.
    */
   override defaultPort = 8080;
+
+  /**
+   * Number of seconds of inactivity (no HTTP requests) after which the
+   * container is automatically stopped.
+   *
+   * 60 seconds provides a balance between cost efficiency and warm-start
+   * availability. In a typical pipeline the workflow issues three back-to-back
+   * container calls (transcode → extract-audio → grayscale) within seconds,
+   * so the container stays warm across all steps and only idles out once the
+   * workflow has finished.
+   */
+  override sleepAfter = 60;
 }
