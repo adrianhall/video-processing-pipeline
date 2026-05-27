@@ -24,6 +24,7 @@ import {
   type PathPolicy,
 } from "@adrianhall/cloudflare-auth";
 import { Hono } from "hono";
+import { statusRouter } from "./api/status";
 import { uploadRouter } from "./api/upload";
 import { videosRouter } from "./api/videos";
 
@@ -112,6 +113,17 @@ app.route("/api/videos", uploadRouter);
  * See `src/api/videos.ts` for full documentation of each endpoint.
  */
 app.route("/api/videos", videosRouter);
+
+/**
+ * Workflow status route: `GET /api/videos/:id/status`.
+ *
+ * Returns combined D1 pipeline status and live Cloudflare Workflow instance
+ * status for a given video.  Consumed by the frontend polling mechanism to
+ * show real-time processing progress.
+ *
+ * See `src/api/status.ts` for full documentation of the endpoint.
+ */
+app.route("/api/videos", statusRouter);
 
 // ---------------------------------------------------------------------------
 // Public routes
