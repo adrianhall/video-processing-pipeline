@@ -24,6 +24,7 @@ import {
   type PathPolicy,
 } from "@adrianhall/cloudflare-auth";
 import { Hono } from "hono";
+import { uploadRouter } from "./api/upload";
 
 /**
  * Hono application type that wires the generated `Env` bindings and the
@@ -89,6 +90,17 @@ const app = new Hono<AppEnv>();
 // ---------------------------------------------------------------------------
 app.use(developerAuthentication({ policies: authPolicies }));
 app.use(cloudflareAccess({ policies: authPolicies }));
+
+// ---------------------------------------------------------------------------
+// API routes — mounted before the catch-all static asset handler
+// ---------------------------------------------------------------------------
+
+/**
+ * Upload initiation routes: `POST /api/videos` and `POST /api/videos/:id/process`.
+ *
+ * See `src/api/upload.ts` for full documentation of each endpoint.
+ */
+app.route("/api/videos", uploadRouter);
 
 // ---------------------------------------------------------------------------
 // Public routes
