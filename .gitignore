@@ -2,6 +2,12 @@
 ### GIT Ignore Instructions
 ###
 
+### <!-- Demo / test videos -->
+# Large binary video files used for local smoke testing.
+# Not committed — too large for version control.
+# See scripts/pipeline-smoke-test.sh for usage.
+demo-videos/
+
 ### <!-- Build output -->
 # public/ is the Vite build output directory (ISSUE-19 will produce this).
 # We ignore the contents (public/*) rather than the directory itself so that
