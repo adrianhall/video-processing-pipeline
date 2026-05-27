@@ -579,9 +579,24 @@ The `wrangler.jsonc.tpl` template is the bridge between Terraform outputs and Wr
 
   "containers": [
     {
-      "binding": "FFMPEG_CONTAINER",
       "class_name": "FFmpegContainer",
-      "image": "./container"
+      "image": "./container/Dockerfile"
+    }
+  ],
+
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "FFMPEG_CONTAINER",
+        "class_name": "FFmpegContainer"
+      }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["FFmpegContainer"]
     }
   ]
 }

@@ -28,6 +28,22 @@ Records variances from the plan and reasons. Each entry includes the issue where
 
 ---
 
+## ISSUE-03: Containers config requires durable_objects.bindings and migrations; no binding field
+
+**Decision**: The `containers` array entry uses only `class_name` and `image`. The binding name (`FFMPEG_CONTAINER`) lives in `durable_objects.bindings`, and a `migrations` block with `new_sqlite_classes` is required to register the DO class.
+
+**Reason**: Three errors were present in the PLAN.md template:
+
+1. **`"binding"` is not a valid field in a `containers` entry** — the `ContainerApp` JSON schema has `additionalProperties: false`. The field is silently flagged as an error by the VSCode schema checker. The binding name belongs in `durable_objects.bindings[].name`, not in the container item itself.
+
+2. **`"image"` must point to the Dockerfile, not the directory** — changed from `"./container"` to `"./container/Dockerfile"`. (Note: the Cloudflare docs state that `image` can be a path to a Dockerfile *or* a directory containing one, so the directory form would also work; the explicit Dockerfile path is unambiguous.)
+
+3. **Missing `durable_objects.bindings` and `migrations`** — without `durable_objects.bindings`, `env.FFMPEG_CONTAINER` is undefined in the Worker at runtime. Without `migrations` (specifically `new_sqlite_classes: ["FFmpegContainer"]`), Wrangler rejects the deploy because the Durable Object class is never registered. Both blocks are mandatory for every Container-backed DO per Cloudflare documentation.
+
+**Implication**: Every future issue that references the wrangler template (ISSUE-13 container code, ISSUE-14 workflow code) must use this corrected three-part structure: `containers` (image config) + `durable_objects.bindings` (env binding) + `migrations` (DO registration).
+
+---
+
 ## ISSUE-01/02: check:markdown scope narrowed to docs/**/*.md
 
 **Decision**: The `check:markdown` script was changed from `'**/*.md' '#node_modules'` to `'docs/**/*.md' '#node_modules'` (by the operator, during ISSUE-02 execution).
