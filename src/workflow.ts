@@ -26,9 +26,9 @@
  *
  * ## Current state
  *
- * Steps 1, 2, and 3 are fully implemented. Steps 4–6 are scaffolded as clearly-labelled
+ * Steps 1–4 are fully implemented. Steps 5 and 6 are scaffolded as clearly-labelled
  * placeholder comments that describe what each step will do and which R2 keys it
- * reads / writes. They will be filled in by ISSUE-17 through ISSUE-18.
+ * reads / writes. They will be filled in by ISSUE-18.
  *
  * @module workflow
  */
@@ -352,22 +352,86 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
       );
 
       // =======================================================================
-      // STEP 4: Create grayscale video  (ISSUE-17)
+      // STEP 4: Create grayscale video
       // =======================================================================
       // Purpose: Apply the `format=gray` ffmpeg filter to produce a black-and-white
       // version of the MP4.  The original colour MP4 is kept in R2 untouched.
-      // The grayscale version is the one uploaded to Cloudflare Stream.
+      // The grayscale version is the one uploaded to Cloudflare Stream in Step 5.
       //
       // How it works:
-      //  1. Presigned GET for "video/{videoId}.mp4" (output of Step 2).
-      //  2. Presigned PUT for "bwvideo/{videoId}.mp4".
-      //  3. POST /grayscale on the FFmpegContainer.
+      //  1. Flip D1 status to "grayscaling" so the UI reflects the active stage.
+      //  2. Generate a presigned GET URL for "video/{videoId}.mp4" (Step 2 output).
+      //  3. Generate a presigned PUT URL for "bwvideo/{videoId}.mp4".
+      //  4. Call POST /grayscale on the per-video FFmpegContainer instance.
+      //     The container runs `ffmpeg -i input -vf format=gray -c:a copy output.mp4` —
+      //     `format=gray` desaturates every frame while `-c:a copy` passes the audio
+      //     stream through without re-encoding for efficiency.
+      //  5. Persist the output key as r2_bw_key in D1.
+      //
+      // After this step the container has completed all its work.  The 60-second
+      // `sleepAfter` window means it will auto-stop shortly after.  Steps 5 and 6
+      // operate on R2 objects and the Stream API — no container involvement.
       //
       // D1 status while running: "grayscaling"
-      // Input:  "video/{videoId}.mp4"   (r2_video_key from Step 2)
+      // Input:  "video/{videoId}.mp4"   (r2_video_key written by Step 2)
       // Output: "bwvideo/{videoId}.mp4" (stored as r2_bw_key in D1)
-      //
-      // TODO (ISSUE-17): await step.do("grayscale", async () => { … });
+      await step.do(
+        "grayscale",
+        { retries: { limit: 3, delay: "10 seconds" } },
+        async () => {
+          // Mark the video as actively converting to grayscale so the UI reflects
+          // the current pipeline stage immediately, before the container call begins.
+          await this.env.DB.prepare(
+            "UPDATE videos SET status = ?, updated_at = ? WHERE id = ?",
+          )
+            .bind("grayscaling", new Date().toISOString(), videoId)
+            .run();
+
+          // Presigned GET for the transcoded MP4 produced by Step 2.
+          const inputUrl = await generatePresignedUrl(
+            this.env,
+            this.env.R2_BUCKET_NAME,
+            `video/${videoId}.mp4`,
+            "GET",
+          );
+
+          // Compute the output key once — used for both the presigned PUT URL
+          // and the final D1 update.
+          const outputKey = `bwvideo/${videoId}.mp4`;
+          const outputUrl = await generatePresignedUrl(
+            this.env,
+            this.env.R2_BUCKET_NAME,
+            outputKey,
+            "PUT",
+          );
+
+          // Re-use the named container instance from Steps 2 and 3.  getByName() is
+          // idempotent — the same Durable Object stub is returned for the same name.
+          // The container is still within the 60-second sleepAfter window from Step 3.
+          const container = this.env.FFMPEG_CONTAINER.getByName(videoId);
+          const resp = await container.fetch("http://container/grayscale", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              input_url: inputUrl,
+              output_url: outputUrl,
+            }),
+          });
+
+          const result = await resp.json<ContainerResult>();
+          if (!result.ok) {
+            throw new Error(`Grayscale conversion failed: ${result.error}`);
+          }
+
+          // Record the output key so Step 5 (upload-to-stream) and the UI
+          // (VideoCard) can reference the grayscale file in R2.
+          await this.env.DB.prepare(
+            "UPDATE videos SET r2_bw_key = ?, updated_at = ? WHERE id = ?",
+          )
+            .bind(outputKey, new Date().toISOString(), videoId)
+            .run();
+        },
+      );
 
       // =======================================================================
       // STEP 5: Upload grayscale video to Cloudflare Stream  (ISSUE-18)
