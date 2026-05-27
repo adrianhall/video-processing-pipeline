@@ -26,9 +26,9 @@
  *
  * ## Current state
  *
- * Steps 1 and 2 are fully implemented. Steps 3–6 are scaffolded as clearly-labelled
+ * Steps 1, 2, and 3 are fully implemented. Steps 4–6 are scaffolded as clearly-labelled
  * placeholder comments that describe what each step will do and which R2 keys it
- * reads / writes. They will be filled in by ISSUE-16 through ISSUE-18.
+ * reads / writes. They will be filled in by ISSUE-17 through ISSUE-18.
  *
  * @module workflow
  */
@@ -273,21 +273,83 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
       );
 
       // =======================================================================
-      // STEP 3: Extract audio to MP3  (ISSUE-16)
+      // STEP 3: Extract audio to MP3
       // =======================================================================
       // Purpose: Produce a standalone audio file that can be downloaded or used
       // independently of the video.  Stored in R2 under the "audio/" prefix.
       //
       // How it works:
-      //  1. Presigned GET for "video/{videoId}.mp4" (output of Step 2).
-      //  2. Presigned PUT for "audio/{videoId}.mp3".
-      //  3. POST /extract-audio on the FFmpegContainer.
+      //  1. Flip D1 status to "extracting_audio" so the UI reflects the active stage.
+      //  2. Generate a presigned GET URL for "video/{videoId}.mp4" (Step 2 output).
+      //  3. Generate a presigned PUT URL for "audio/{videoId}.mp3".
+      //  4. Call POST /extract-audio on the per-video FFmpegContainer instance.
+      //     The container runs `ffmpeg -i input -vn -c:a libmp3lame output.mp3` —
+      //     "-vn" drops the video stream, leaving only the audio track as MP3.
+      //  5. Persist the output key as r2_audio_key in D1.
+      //
+      // The container instance was already warm from Step 2 (within the 60-second
+      // sleepAfter window), so this step has no cold-start penalty.
       //
       // D1 status while running: "extracting_audio"
-      // Input:  "video/{videoId}.mp4"  (r2_video_key from Step 2)
+      // Input:  "video/{videoId}.mp4"  (r2_video_key written by Step 2)
       // Output: "audio/{videoId}.mp3"  (stored as r2_audio_key in D1)
-      //
-      // TODO (ISSUE-16): await step.do("extract-audio", async () => { … });
+      await step.do(
+        "extract-audio",
+        { retries: { limit: 3, delay: "10 seconds" } },
+        async () => {
+          // Mark the video as actively extracting audio so the UI reflects the
+          // current pipeline stage immediately.
+          await this.env.DB.prepare(
+            "UPDATE videos SET status = ?, updated_at = ? WHERE id = ?",
+          )
+            .bind("extracting_audio", new Date().toISOString(), videoId)
+            .run();
+
+          // Presigned GET for the transcoded MP4 produced by Step 2.
+          const inputUrl = await generatePresignedUrl(
+            this.env,
+            this.env.R2_BUCKET_NAME,
+            `video/${videoId}.mp4`,
+            "GET",
+          );
+
+          // Compute the output key once — used for both the presigned PUT URL
+          // and the final D1 update.
+          const outputKey = `audio/${videoId}.mp3`;
+          const outputUrl = await generatePresignedUrl(
+            this.env,
+            this.env.R2_BUCKET_NAME,
+            outputKey,
+            "PUT",
+          );
+
+          // Re-use the named container instance from Step 2.  getByName() is
+          // idempotent — the same Durable Object stub is returned for the same
+          // name, and the container is still warm from the transcode step.
+          const container = this.env.FFMPEG_CONTAINER.getByName(videoId);
+          const resp = await container.fetch("http://container/extract-audio", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              input_url: inputUrl,
+              output_url: outputUrl,
+            }),
+          });
+
+          const result = await resp.json<ContainerResult>();
+          if (!result.ok) {
+            throw new Error(`Audio extraction failed: ${result.error}`);
+          }
+
+          // Record the output key so the UI (VideoCard) and any future consumers
+          // can reference the extracted audio file in R2.
+          await this.env.DB.prepare(
+            "UPDATE videos SET r2_audio_key = ?, updated_at = ? WHERE id = ?",
+          )
+            .bind(outputKey, new Date().toISOString(), videoId)
+            .run();
+        },
+      );
 
       // =======================================================================
       // STEP 4: Create grayscale video  (ISSUE-17)
