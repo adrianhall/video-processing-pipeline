@@ -9,13 +9,13 @@
 demo-videos/
 
 ### <!-- Build output -->
-# public/ is the Vite build output directory (ISSUE-19 will produce this).
+# public/ is the Vite build output directory (built by ui/).
 # We ignore the contents (public/*) rather than the directory itself so that
-# the placeholder index.html can be committed via the negation below.
-# In ISSUE-19, once Vite outputs the real SPA here, update this to re-ignore
-# the generated files while retaining this placeholder approach.
+# the .gitkeep placeholder can be committed via the negation below.
+# (Using the directory pattern `public/` prevents git from traversing into it,
+#  which makes negation rules ineffective — see DECISIONS.md ISSUE-06.)
 public/*
-!public/index.html
+!public/.gitkeep
 
 ### <!-- ENVIRONMENT -->
 .dev.vars

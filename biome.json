@@ -17,15 +17,22 @@
       "quoteStyle": "double"
     }
   },
+  "css": {
+    "parser": {
+      "cssModules": false,
+      "tailwindDirectives": true
+    }
+  },
   "files": {
     "includes": [
       "**",
       "!**/node_modules/",
-      "!**/public/",
+      "!public",
       "!**/infra/",
       "!.wrangler",
       "!**/container/",
-      "!worker-configuration.d.ts"
+      "!worker-configuration.d.ts",
+      "!ui/dist"
     ]
   }
 }

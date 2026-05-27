@@ -400,6 +400,82 @@ This is documented at the [R2 authentication page](https://developers.cloudflare
 
 ---
 
+## ISSUE-19: TypeScript 6 deprecates `baseUrl`; removed from ui/tsconfig.json
+
+**Decision**: Removed the `"baseUrl": "."` compiler option from `ui/tsconfig.json`.
+The `paths` option (`"@/*": ["./src/*"]`) is retained and resolves paths correctly
+without `baseUrl` in TypeScript 6.
+
+**Reason**: TypeScript 6.0 deprecated `baseUrl` as a standalone path-resolution
+mechanism (see `https://aka.ms/ts6`).  With `"moduleResolution": "Bundler"`,
+TypeScript 6 resolves `paths` entries relative to the tsconfig file location
+without needing `baseUrl`.  Using `baseUrl` triggers a deprecation error that
+causes `tsc -b --noEmit` to exit with code 2.
+
+**Implication**: The Vite `resolve.alias` in `ui/vite.config.ts` continues to
+use `path.resolve(__dirname, "./src")` for the `@` alias — this is independent
+of TypeScript's `paths` and is unaffected by the tsconfig change.
+
+---
+
+## ISSUE-19: Biome `!**/public/` pattern updated to `!public` (trailing slash issue)
+
+**Decision**: Changed the Biome `files.includes` exclusion for the Vite build
+output directory from `"!**/public/"` to `"!public"` (no trailing slash, no
+double-star prefix).
+
+**Reason**: Following the same fix applied to `.wrangler` in ISSUE-15, the
+trailing-slash form (`!**/public/`) does not reliably exclude the directory and
+all its contents in Biome v2.2.0+.  After running `vite build`, the `public/`
+directory is populated with minified JS and CSS that Biome correctly flagged
+with thousands of lint violations.  Removing the trailing slash (and the `**/`
+prefix, since the directory is at the project root) resolves the issue.
+
+**Implication**: `public/` (and only the root-level one) is now excluded from
+Biome linting/formatting.
+
+---
+
+## ISSUE-19: Biome CSS parser requires `tailwindDirectives: true` for shadcn theme
+
+**Decision**: Added `"css": { "parser": { "cssModules": false, "tailwindDirectives": true } }`
+to `biome.json`.
+
+**Reason**: The shadcn/ui nova preset injects Tailwind v4–specific directives
+into `ui/src/index.css`: `@custom-variant`, `@theme inline { … }`, and `@apply`.
+Without enabling `tailwindDirectives` in Biome's CSS parser, these are flagged
+as parse errors (not lint warnings) and `biome check` exits with non-zero status.
+
+**Implication**: All CSS files in the project are now parsed with Tailwind
+directive support.  This is a global setting; it cannot be scoped to a single
+file.  Non-Tailwind CSS in the project is unaffected since the directives are
+simply allowed, not required.
+
+---
+
+## ISSUE-19: `public/.gitkeep` is deleted by each `vite build`
+
+**Decision**: Committed `public/.gitkeep` as the sole tracked file in `public/`
+to preserve the directory in fresh clones.  The file is deleted on every
+`npm run build` (Vite's `emptyOutDir: true`) and replaced by real build output.
+
+**Reason**: Wrangler's `assets.directory: "./public"` requires the directory to
+exist.  Since `public/` contains only generated content (ignored via
+`public/*` in `.gitignore`), the directory itself would not be cloned.  The
+`.gitkeep` placeholder solves this.
+
+**Behaviour after `npm run build`**: `public/.gitkeep` is deleted; `public/index.html`
+and `public/assets/` are created.  Running `git status` will show `.gitkeep` as
+deleted until `git checkout -- public/.gitkeep` restores it.  This is expected —
+the `prestart` script always rebuilds the SPA before `wrangler dev` starts, so
+`.gitkeep` is never needed at runtime.
+
+**`!public/.gitkeep` negation**: Uses the `public/*` glob pattern (not the
+directory pattern `public/`) so that git can traverse into `public/` and the
+negation takes effect.  See ISSUE-06 decisions for the rationale.
+
+---
+
 ## ISSUE-01/02: check:markdown scope narrowed to docs/**/*.md
 
 **Decision**: The `check:markdown` script was changed from `'**/*.md' '#node_modules'` to `'docs/**/*.md' '#node_modules'` (by the operator, during ISSUE-02 execution).
