@@ -46,7 +46,7 @@ Each card shows:
 - Filename (truncated if long)
 - Status badge with variant based on status value
 - `created_at` formatted as relative time or short date
-- "Play" button — only enabled when `status === "complete"` and `stream_url` is non-null
+- "Play" button — only enabled when `status === "complete"` and `play_url` is non-null
 
 ### Status Badge Mapping
 

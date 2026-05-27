@@ -1,8 +1,8 @@
-# Issue 18 — Workflow: Upload to Stream and Finalize
+# Issue 18 — Workflow: Finalize + R2 Streaming Endpoint
 
 ## Summary
 
-Implement the final two workflow steps: Step 5 uploads the grayscale video to Cloudflare Stream via the Stream API, and Step 6 finalizes by updating D1 to `complete` and deleting the incoming file from R2. After this issue, the full pipeline is functional end-to-end.
+Implement the final workflow step (finalize: mark D1 `complete`, delete incoming R2 file) and add the `GET /api/videos/:id/stream` Worker endpoint that streams the grayscale MP4 directly from R2 to the browser. Cloudflare Stream was evaluated but removed — see `docs/DECISIONS.md` (ISSUE-18 entry) for the full rationale. After this issue the full pipeline is functional end-to-end.
 
 ## Relevant Skills
 
@@ -15,14 +15,13 @@ Implement the final two workflow steps: Step 5 uploads the grayscale video to Cl
 
 ## Acceptance Criteria
 
-- [ ] Step 5 (`upload-to-stream`) is implemented: updates status to `uploading_to_stream`, generates a presigned GET URL for the grayscale video, calls the Cloudflare Stream "copy from URL" API, stores `stream_video_id` and `stream_url` in D1
-- [ ] Step 6 (`finalize`) is implemented: updates status to `complete`, deletes the incoming file from R2 (`BUCKET.delete(r2IncomingKey)`)
-- [ ] The Stream API call uses `env.CF_API_TOKEN` for authentication and `env.CF_ACCOUNT_ID` for the account
-- [ ] Stream API endpoint: `POST https://api.cloudflare.com/client/v4/accounts/{account_id}/stream/copy`
-- [ ] The step stores the `stream_url` in the format suitable for the `@cloudflare/stream-react` player
-- [ ] Both steps have appropriate retry config
-- [ ] `npm run check` passes
-- [ ] The full workflow (steps 1–6) reads linearly from top to bottom with clear comments
+- [x] Step 5 (`finalize`) is implemented: updates status to `complete`, deletes the incoming file from R2 (`BUCKET.delete(r2IncomingKey)`)
+- [x] `GET /api/videos/:id/stream` endpoint added to `src/api/videos.ts`: reads `r2_bw_key` from D1 and streams the R2 object to the browser with HTTP Range support
+- [x] `VideoResource.play_url` computed as `/api/videos/{id}/stream` when `r2_bw_key` is set
+- [x] `uploading_to_stream` status removed from `VideoStatus`; pipeline is `uploading → processing → transcoding → extracting_audio → grayscaling → complete`
+- [x] Cloudflare Stream token and permission group removed from Terraform and `wrangler.jsonc.tpl`
+- [x] `npm run check` passes
+- [x] The full workflow (steps 1–5) reads linearly from top to bottom with clear comments
 
 ## Added, Modified, and Deleted Files
 

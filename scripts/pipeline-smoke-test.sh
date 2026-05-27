@@ -16,7 +16,7 @@
 #   Test 7   r2_video_key correct in D1         [ISSUE-15: transcode step]
 #   Test 8   r2_audio_key correct in D1         [ISSUE-16: extract-audio step]
 #   Test 9   r2_bw_key correct in D1            [ISSUE-17: grayscale step]
-#   Test 10  stream_video_id non-null in D1     [ISSUE-18: Stream upload step]
+#   Test 10  (removed — Stream replaced by direct R2 playback)
 #
 # Run this script after all six workflow steps are deployed (ISSUE-18 complete).
 # Run with each demo video to exercise every code path:
@@ -264,11 +264,21 @@ fi
 # Test 6: Verify stream_url is set in the API response            [ISSUE-18]
 # ---------------------------------------------------------------------------
 
-echo "Test 6: Verify stream_url in API response  [ISSUE-18: Stream upload step]"
+echo "Test 6: Verify play_url in API response and streaming endpoint responds"
 video_json=$(curl -s "${BASE}/api/videos/${VIDEO_ID}" -H "$AUTH_HEADER" 2>/dev/null || echo "")
 echo "  ← $video_json"
-stream_url=$(echo "$video_json" | grep -o '"stream_url":"[^"]*"' | cut -d'"' -f4)
-check_nonempty "stream_url" "$stream_url"
+play_url=$(echo "$video_json" | grep -o '"play_url":"[^"]*"' | cut -d'"' -f4)
+check_nonempty "play_url" "$play_url"
+# Also verify the stream endpoint itself returns HTTP 200 with video/mp4
+if [ -n "$play_url" ]; then
+  _stream_status=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}${play_url}" -H "$AUTH_HEADER")
+  echo "  Stream endpoint HTTP status: $_stream_status"
+  if [ "$_stream_status" = "200" ] || [ "$_stream_status" = "206" ]; then
+    pass "Stream endpoint returned HTTP $_stream_status"
+  else
+    fail "Stream endpoint — expected 200/206, got $_stream_status"
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 # Tests 7-10: D1 field verification via wrangler d1 execute
@@ -289,14 +299,13 @@ else
   d1_json=$(npx wrangler d1 execute video-pipeline-db \
     $D1_FLAG \
     --config wrangler.jsonc \
-    --command "SELECT r2_video_key, r2_audio_key, r2_bw_key, stream_video_id FROM videos WHERE id='${VIDEO_ID}'" \
+    --command "SELECT r2_video_key, r2_audio_key, r2_bw_key FROM videos WHERE id='${VIDEO_ID}'" \
     --json 2>/dev/null || echo "[]")
   echo "  D1 query result: $d1_json"
 
   r2_video_key=$(echo "$d1_json" | grep -o '"r2_video_key":"[^"]*"' | cut -d'"' -f4)
   r2_audio_key=$(echo "$d1_json" | grep -o '"r2_audio_key":"[^"]*"' | cut -d'"' -f4)
   r2_bw_key=$(echo "$d1_json"    | grep -o '"r2_bw_key":"[^"]*"'    | cut -d'"' -f4)
-  stream_video_id=$(echo "$d1_json" | grep -o '"stream_video_id":"[^"]*"' | cut -d'"' -f4)
 
   # -------------------------------------------------------------------------
   # Test 7: r2_video_key = "video/{videoId}.mp4"                  [ISSUE-15]
@@ -340,14 +349,6 @@ else
     fail "r2_bw_key: expected '${expected_bw_key}', got '${r2_bw_key}'"
   fi
 
-  # -------------------------------------------------------------------------
-  # Test 10: stream_video_id non-null in D1                        [ISSUE-18]
-  #
-  # Set by Step 5 (upload-to-stream).  The Cloudflare Stream UID is returned
-  # by the Stream "copy from URL" API and stored alongside stream_url.
-  # -------------------------------------------------------------------------
-  echo "Test 10: Verify stream_video_id in D1  [ISSUE-18: Stream upload step]"
-  check_nonempty "stream_video_id" "$stream_video_id"
 fi
 
 # ---------------------------------------------------------------------------
@@ -363,6 +364,5 @@ if [ "$SKIP_D1" = "0" ]; then
   echo "  r2_video_key:    ${r2_video_key}"
   echo "  r2_audio_key:    ${r2_audio_key}"
   echo "  r2_bw_key:       ${r2_bw_key}"
-  echo "  stream_video_id: ${stream_video_id}"
 fi
-echo "  stream_url:      ${stream_url}"
+echo "  play_url:        ${play_url}"

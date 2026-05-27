@@ -38,11 +38,6 @@ data "cloudflare_account_api_token_permission_groups_list" "r2_storage_write" {
   name       = "Workers R2 Storage Write"
 }
 
-data "cloudflare_account_api_token_permission_groups_list" "stream_write" {
-  account_id = local.account_id
-  name       = "Stream Write"
-}
-
 # ── Worker Registration ───────────────────────────────────────────────────────
 # Registers the Worker name with Cloudflare. Code is deployed separately by
 # Wrangler — Terraform only manages the resource lifecycle (create/destroy).
@@ -158,23 +153,5 @@ resource "cloudflare_zero_trust_access_application" "video_pipeline_app" {
   }]
 }
 
-# ── Stream API Token ──────────────────────────────────────────────────────────
-# Used by the VideoProcessingWorkflow to call the Stream copy-from-URL API
-# which ingests the final grayscale video from R2 into Cloudflare Stream.
-#
-# token.value → CF_API_TOKEN wrangler var (Bearer token for Stream REST API)
-
-resource "cloudflare_account_token" "stream_token" {
-  account_id = local.account_id
-  name       = "video-pipeline-stream"
-
-  policies = [{
-    effect = "allow"
-    permission_groups = [{
-      id = data.cloudflare_account_api_token_permission_groups_list.stream_write.result[0].id
-    }]
-    resources = jsonencode({
-      "com.cloudflare.api.account.${local.account_id}" = "*"
-    })
-  }]
-}
+# Stream API token removed — video playback uses direct R2 streaming via the
+# Worker endpoint GET /api/videos/:id/stream.  See docs/DECISIONS.md ISSUE-18.

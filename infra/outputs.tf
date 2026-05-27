@@ -61,12 +61,6 @@ output "r2_token_value" {
   sensitive   = true
 }
 
-output "stream_token_value" {
-  description = "Stream API token value, used as the Bearer token for the Stream copy-from-URL API calls made by VideoProcessingWorkflow."
-  value       = cloudflare_account_token.stream_token.value
-  sensitive   = true
-}
-
 output "access_aud" {
   description = "Audience tag for the Cloudflare Access application protecting the Worker. Used to verify the `aud` claim in Access JWTs during local debugging or additional validation layers."
   value       = cloudflare_zero_trust_access_application.video_pipeline_app.aud

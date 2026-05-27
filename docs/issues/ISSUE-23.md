@@ -17,7 +17,7 @@ Add automatic polling to the `VideoList` component so that video statuses update
 ## Acceptance Criteria
 
 - [ ] `VideoList` polls `GET /api/videos` on an interval using `useEffect` + `setInterval`
-- [ ] Polling interval is **3 seconds** while any video has an in-progress status (`uploading`, `processing`, `transcoding`, `extracting_audio`, `grayscaling`, `uploading_to_stream`)
+- [ ] Polling interval is **3 seconds** while any video has an in-progress status (`uploading`, `processing`, `transcoding`, `extracting_audio`, `grayscaling`)
 - [ ] Polling interval switches to **30 seconds** when all videos are `complete` or `error`
 - [ ] The interval is cleaned up on component unmount (`useEffect` return function)
 - [ ] The polling does not stack (new fetch waits for previous to complete, or uses a guard)

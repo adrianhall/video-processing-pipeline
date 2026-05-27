@@ -31,16 +31,13 @@ flowchart TB
         S2["Step 2: Transcode to MP4"]
         S3["Step 3: Extract Audio to MP3"]
         S4["Step 4: Create Grayscale Video"]
-        S5["Step 5: Upload to Stream"]
-        S6["Step 6: Finalize<br/>(D1 → complete)"]
-        S1 --> S2 --> S3 --> S4 --> S5 --> S6
+        S5["Step 5: Finalize<br/>(D1 → complete)"]
+        S1 --> S2 --> S3 --> S4 --> S5
     end
 
     subgraph CT["FFmpegContainer (Cloudflare Container)"]
         HS["HTTP Server (Python/Flask)<br/>POST /transcode · /extract-audio · /grayscale<br/>ffmpeg binary"]
     end
-
-    ST(["Cloudflare Stream<br/>(Playback via iframe/React)"])
 
     UZ --> EP1
     VD --> EP2
@@ -55,8 +52,8 @@ flowchart TB
 
     WF <-->|"presigned GET/PUT"| R2
     WF -->|"HTTP calls"| CT
-    WF -->|"Stream copy API"| ST
     WF -->|"status updates"| D1
+    EP3 -->|"stream bwvideo"| R2
 ```
 
 ## Technology Stack
@@ -72,9 +69,8 @@ flowchart TB
 | Object Storage | Cloudflare R2 | Raw uploads, processed files |
 | Orchestration | Cloudflare Workflows | Multi-step video pipeline |
 | Video Processing | Cloudflare Containers + ffmpeg | CPU-intensive transcoding |
-| Video Delivery | Cloudflare Stream | Adaptive bitrate playback |
+| Video Delivery | R2 via Worker streaming endpoint | Direct MP4 playback |
 | Frontend | React + Vite | Single-page application |
-| Stream Player | `@cloudflare/stream-react` | Embedded video player |
 | Linting / Formatting | Biome | Single tool for lint + format (replaces ESLint + Prettier) |
 | Script composition | npm-run-all2 (`run-s`) | Fail-fast sequential script chains for `check` and `fix` |
 | Testing | Vitest + `@cloudflare/vitest-pool-workers` | Workers-native test runner |
@@ -134,7 +130,7 @@ video-processing-pipeline/
 │           ├── UploadZone.tsx    # Drag-and-drop upload
 │           ├── VideoList.tsx     # Dashboard with video cards
 │           ├── VideoCard.tsx     # Individual video status card
-│           └── VideoPlayer.tsx   # Stream player wrapper
+│           └── VideoPlayer.tsx   # HTML5 <video> player wrapper
 │
 └── public/                       # Vite build output (gitignored)
 ```
@@ -154,8 +150,8 @@ video-processing-pipeline/
 | `r2_video_key` | TEXT | Key for transcoded MP4 |
 | `r2_audio_key` | TEXT | Key for extracted audio |
 | `r2_bw_key` | TEXT | Key for grayscale video |
-| `stream_video_id` | TEXT | Cloudflare Stream video UID |
-| `stream_url` | TEXT | Stream playback URL |
+| `stream_video_id` | TEXT | Legacy — unused; always NULL after ISSUE-18 |
+| `stream_url` | TEXT | Legacy — unused; always NULL after ISSUE-18 |
 | `error_message` | TEXT | Error details if failed |
 | `created_at` | TEXT | ISO timestamp |
 | `updated_at` | TEXT | ISO timestamp |
@@ -169,8 +165,7 @@ stateDiagram-v2
     processing --> transcoding
     transcoding --> extracting_audio
     extracting_audio --> grayscaling
-    grayscaling --> uploading_to_stream
-    uploading_to_stream --> complete
+    grayscaling --> complete
     complete --> [*]
 
     uploading --> error
@@ -178,7 +173,6 @@ stateDiagram-v2
     transcoding --> error
     extracting_audio --> error
     grayscaling --> error
-    uploading_to_stream --> error
 ```
 
 ## R2 Storage Layout
@@ -187,8 +181,8 @@ stateDiagram-v2
 |--------|----------|-----------|
 | `incoming/{videoId}.{ext}` | Raw uploaded files | Deleted after workflow completes |
 | `video/{videoId}.mp4` | Transcoded MP4 | Persistent |
-| `audio/{videoId}.mp3` | Extracted audio track | Persistent |
-| `bwvideo/{videoId}.mp4` | Grayscale video | Persistent (also on Stream) |
+| `audio/{videoId}.mp3` | Extracted audio track | Persistent (may be absent for video-only inputs) |
+| `bwvideo/{videoId}.mp4` | Grayscale video | Persistent — served via `GET /api/videos/:id/stream` |
 
 ## Workflow Pipeline
 
@@ -199,22 +193,20 @@ The `VideoProcessingWorkflow` is the core of the project. Each step is independe
 class VideoProcessingWorkflow extends WorkflowEntrypoint<Env, Params> {
   async run(event: WorkflowEvent<Params>, step: WorkflowStep) {
     // Step 1: Register in D1
-    await step.do('register', async () => { /* INSERT into D1 */ });
+    await step.do('register', async () => { /* UPDATE D1 → processing */ });
 
     // Step 2: Transcode to MP4 (if needed)
     await step.do('transcode', async () => { /* Container: ffmpeg transcode */ });
 
-    // Step 3: Extract audio
+    // Step 3: Extract audio (no-op if video has no audio stream)
     await step.do('extract-audio', async () => { /* Container: ffmpeg -map a */ });
 
     // Step 4: Grayscale
     await step.do('grayscale', async () => { /* Container: ffmpeg -vf format=gray */ });
 
-    // Step 5: Upload to Stream
-    await step.do('upload-to-stream', async () => { /* Stream copy API */ });
-
-    // Step 6: Finalize
-    await step.do('finalize', async () => { /* Update D1, delete incoming */ });
+    // Step 5: Finalize — delete incoming file, mark complete
+    // bwvideo/{id}.mp4 stays in R2 and is served by GET /api/videos/:id/stream
+    await step.do('finalize', async () => { /* DELETE incoming, UPDATE D1 → complete */ });
   }
 }
 ```
@@ -287,8 +279,9 @@ The container also exposes `GET /health` returning `{ "ok": true }` for readines
 |--------|------|------|-------------|
 | `POST` | `/api/videos` | Yes | Register video, return presigned upload URL |
 | `POST` | `/api/videos/:id/process` | Yes | Mark upload complete, start workflow |
-| `GET` | `/api/videos` | Yes | List all videos with status |
+| `GET` | `/api/videos` | Yes | List all videos with status and `play_url` |
 | `GET` | `/api/videos/:id` | Yes | Get single video details |
+| `GET` | `/api/videos/:id/stream` | Yes | Stream grayscale MP4 from R2 (supports Range) |
 | `GET` | `/api/videos/:id/status` | Yes | Get workflow instance status |
 | `GET` | `/api/version` | No | Health check / version |
 | `GET` | `*` | Bypass | Static assets via ASSETS binding |
@@ -389,7 +382,7 @@ interface VideoResource {
   filename: string;
   original_format: string;
   status: VideoStatus;
-  stream_url: string | null;
+  play_url: string | null;  // "/api/videos/{id}/stream" once r2_bw_key is set
   error_message: string | null;
   created_at: string;
   updated_at: string;
@@ -404,7 +397,7 @@ interface UploadInitResponse {
 type VideoStatus =
   | "uploading" | "processing" | "transcoding"
   | "extracting_audio" | "grayscaling"
-  | "uploading_to_stream" | "complete" | "error";
+  | "complete" | "error";
 ```
 
 ## Frontend Components
@@ -446,7 +439,7 @@ cd ui && npx shadcn@latest init --preset nova --template vite
 | `UploadZone` | `Card`, `Button`, `Progress`, `Badge` | Native HTML5 drag-and-drop API; XHR (not `fetch`) for upload progress |
 | `VideoList` | `Card`, `Skeleton`, `Badge` | CSS grid layout; `Skeleton` shown during initial load |
 | `VideoCard` | `Card`, `CardHeader`, `CardContent`, `Badge` | Status badge variant per `VideoStatus` |
-| `VideoPlayer` | `Dialog`, `Card` | `@cloudflare/stream-react` `<Stream>` inside `Dialog`; lazy-loaded with `React.lazy()` |
+| `VideoPlayer` | `Dialog`, `Card` | Native HTML5 `<video>` inside `Dialog`; `src` set to `play_url`; lazy-loaded with `React.lazy()` |
 
 ### Status Badge Variants
 
@@ -454,7 +447,6 @@ cd ui && npx shadcn@latest init --preset nova --template vite
 |--------|--------------|---------|
 | `uploading` | `outline` | Neutral — user action in progress |
 | `processing` / `transcoding` / `extracting_audio` / `grayscaling` | `secondary` | Active — pipeline working |
-| `uploading_to_stream` | `secondary` | Active — final upload |
 | `complete` | `default` | Success |
 | `error` | `destructive` | Failed |
 
@@ -516,9 +508,8 @@ API tokens for R2 and Stream are created by Terraform as `cloudflare_api_token` 
 
 | Token | Terraform Resource | Wrangler Var | Purpose |
 |-------|--------------------|-------------|---------|
-| R2 S3 access key ID | `cloudflare_api_token.r2_token` `.id` | `R2_ACCESS_KEY_ID` | S3-compatible access key for presigned URLs |
-| R2 S3 secret key | `cloudflare_api_token.r2_token` `.value` | `R2_SECRET_ACCESS_KEY` | S3-compatible secret key for presigned URLs |
-| Stream API token | `cloudflare_api_token.stream_token` `.value` | `CF_API_TOKEN` | Bearer token for Stream copy-from-URL API |
+| R2 S3 access key ID | `cloudflare_account_token.r2_token` `.id` | `R2_ACCESS_KEY_ID` | S3-compatible access key for presigned PUT URLs |
+| R2 S3 secret key | `sha256(cloudflare_account_token.r2_token` `.value)` | `R2_SECRET_ACCESS_KEY` | SHA-256 hash of token value (R2 S3 API requirement) |
 
 All three Terraform outputs are marked `sensitive = true`. `generate-wrangler` can still read sensitive outputs from `terraform output -json`.
 
@@ -779,7 +770,7 @@ except subprocess.TimeoutExpired:
 
 4. **Workflow as the star** - The blog article focuses on Workflows, so the Workflow class should be clean, linear, and heavily commented. Each step maps to a clear business operation.
 
-5. **Stream for playback only** - Only the grayscale video is uploaded to Stream (per IDEA.md). Raw/transcoded/audio files remain in R2.
+5. **Direct R2 playback** - The grayscale video is served directly from R2 via an authenticated Worker endpoint (`GET /api/videos/:id/stream`). H.264/AAC MP4 plays natively in all modern browsers via `<video>` — no streaming service required. Cloudflare Stream was evaluated but requires a paid subscription; see DECISIONS.md ISSUE-18.
 
 6. **Container communicates via presigned URLs** - The Container downloads/uploads files via presigned R2 URLs rather than streaming through the Worker. This is more efficient for large video files.
 

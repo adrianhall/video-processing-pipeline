@@ -282,6 +282,51 @@ treat it as a property of type `string | number`, not a callable method.
 
 ---
 
+## ISSUE-18: Cloudflare Stream replaced with direct R2 playback via Worker streaming endpoint
+
+**Decision**: Removed Cloudflare Stream from the pipeline entirely. Step 5 (`upload-to-stream`) is deleted. The final grayscale MP4 is served for playback directly from R2 via a new authenticated Worker endpoint: `GET /api/videos/:id/stream`.
+
+**Reason**: Cloudflare Stream is a paid product that requires an active subscription. The account used for development does not have Stream enabled, causing every Step 5 call to fail with error code **10002** ("Authorization Failure: The authentication credentials are not authorized to perform the request"). Extensive diagnosis confirmed that:
+
+- Stream **is** compatible with account-owned tokens (`cloudflare_account_token`) per the official compatibility matrix.
+- The permission group name `"Stream Write"` is correct per the Cloudflare API token permissions reference.
+- The token format (`cfat_...` as a Bearer token) is valid for the REST API.
+- The account simply does not have Stream enabled/subscribed.
+
+**Why R2 playback is sufficient for this demo**:
+
+The processed output is an H.264/AAC MP4 — the most universally supported video format. Every modern browser can play it natively via an HTML5 `<video>` tag with no plugin or player SDK required. Cloudflare Stream adds adaptive bitrate transcoding, a global CDN optimised for video, and a managed player widget — none of which are essential for a demo that processes short videos.
+
+The Worker streaming endpoint (`GET /api/videos/:id/stream`) proxies the `bwvideo/{id}.mp4` R2 object through the Worker using the R2 binding's streaming body. Because R2 binding responses are true `ReadableStream` objects (not buffered), the 128 MB Worker memory limit is not a concern. HTTP Range requests are forwarded to R2 natively, enabling browser seek.
+
+**What was removed**:
+
+- `infra/main.tf`: `cloudflare_account_api_token_permission_groups_list.stream_write` data source, `cloudflare_account_token.stream_token` resource.
+- `infra/outputs.tf`: `stream_token_value` output.
+- `wrangler.jsonc.tpl`: `CF_API_TOKEN` var.
+- `src/workflow.ts`: Step 5 (`upload-to-stream`) and the `StreamApiResponse` discriminated union type.
+- `src/types.ts`: `"uploading_to_stream"` status value; `stream_url` field in `VideoResource` replaced by `play_url`.
+- `ui/` dependencies: `@cloudflare/stream-react` not needed.
+
+**What was added**:
+
+- `src/api/videos.ts`: `GET /api/videos/:id/stream` — authenticated endpoint that reads `r2_bw_key` from D1 and streams the R2 object to the browser.
+- `VideoResource.play_url` — computed by the API as `/api/videos/{id}/stream`; `null` until `r2_bw_key` is set.
+
+**Pipeline after this change**:
+
+```text
+uploading → processing → transcoding → extracting_audio → grayscaling → complete
+```
+
+The `bwvideo/{id}.mp4` object in R2 is the terminal artifact. The Worker streams it on demand.
+
+**D1 schema note**: The `stream_video_id` and `stream_url` columns remain in the `videos` table (no migration required). They will always be `NULL` for videos processed after this change. A future cleanup migration could drop them.
+
+**Re-provision required**: After merging this change, `npm run provision` must be re-run to destroy the unused Stream token resource and regenerate `wrangler.jsonc` without `CF_API_TOKEN`. If Stream is enabled on the account in the future, the integration can be re-added cleanly.
+
+---
+
 ## ISSUE-18: wrangler dev intercepts container HTTPS via self-signed proxy; SSL verification disabled for R2 calls
 
 **Decision**: Added a module-level `_UNVERIFIED_SSL_CTX` (`ssl.CERT_NONE`) in `container/server.py` and passed it to all `urllib.request.urlopen()` calls in `_download` and `_upload`.

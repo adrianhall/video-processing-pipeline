@@ -12,10 +12,11 @@
  * All possible status values for a video as it moves through the pipeline.
  *
  * The state machine is linear and forward-only:
- *   uploading → processing → transcoding → extracting_audio →
- *   grayscaling → uploading_to_stream → complete
+ *   uploading → processing → transcoding → extracting_audio → grayscaling → complete
  *
- * Any step may transition to `error` on unrecoverable failure.
+ * Any step may transition to `error` on unrecoverable failure.  The final
+ * output (`bwvideo/{id}.mp4` in R2) is served directly by the Worker via
+ * `GET /api/videos/:id/stream` — no external streaming service is required.
  *
  * @example
  * ```ts
@@ -31,7 +32,6 @@ export type VideoStatus =
   | "transcoding"
   | "extracting_audio"
   | "grayscaling"
-  | "uploading_to_stream"
   | "complete"
   | "error";
 
@@ -128,7 +128,7 @@ export interface ApiError {
  *   filename: "lecture.mkv",
  *   original_format: "mkv",
  *   status: "complete",
- *   stream_url: "https://customer-xxx.cloudflarestream.com/.../manifest/video.m3u8",
+ *   play_url: "/api/videos/01960b1e-4a7b-7d99-b90c-12e0f73c69d0/stream",
  *   error_message: null,
  *   created_at: "2025-05-27T10:00:00.000Z",
  *   updated_at: "2025-05-27T10:05:23.000Z",
@@ -145,10 +145,14 @@ export interface VideoResource {
   /** Current pipeline status. */
   status: VideoStatus;
   /**
-   * Cloudflare Stream playback URL.  `null` until the video reaches
-   * `uploading_to_stream` and Stream processing is complete.
+   * Worker-relative URL for video playback via the R2 streaming endpoint.
+   * Populated as `/api/videos/{id}/stream` once `r2_bw_key` is set
+   * (i.e. after the grayscale step completes).  `null` until then.
+   *
+   * The endpoint streams the grayscale MP4 directly from R2 and supports
+   * HTTP Range requests for browser seek.
    */
-  stream_url: string | null;
+  play_url: string | null;
   /**
    * Human-readable error description when `status === "error"`.
    * `null` for all other statuses.
