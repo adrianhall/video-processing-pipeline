@@ -24,9 +24,6 @@ const { resolve } = require("node:path");
 const root = resolve(__dirname, "..");
 const CONFIG = resolve(root, "wrangler.jsonc");
 const TYPES = resolve(root, "src", "worker-configuration.d.ts");
-// Prefer the project-local wrangler binary so the script works even when
-// wrangler is not installed globally (e.g. CI, direct `node` invocation).
-const WRANGLER = resolve(root, "node_modules", ".bin", "wrangler");
 
 // ── 1. wrangler.jsonc must exist ────────────────────────────────────────────
 if (!existsSync(CONFIG)) {
@@ -63,15 +60,17 @@ if (existsSync(TYPES)) {
 //   With strict-vars=true, wrangler embeds actual token values as literal types
 //   (e.g. R2_SECRET_ACCESS_KEY: "cfat_..."). Since wrangler.jsonc and .env are
 //   gitignored, the generated file must not contain those values.
+// shell: true is required on Windows where npx is a .cmd file, not a binary.
 const result = spawnSync(
-  WRANGLER,
+  "npx",
   [
+    "wrangler",
     "types",
     "src/worker-configuration.d.ts",
     "--include-runtime=false",
     "--strict-vars=false",
   ],
-  { stdio: "inherit", shell: false },
+  { stdio: "inherit", shell: true },
 );
 
 if (result.error) {
