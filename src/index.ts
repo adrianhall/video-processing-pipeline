@@ -25,6 +25,7 @@ import {
 } from "@adrianhall/cloudflare-auth";
 import { Hono } from "hono";
 import { uploadRouter } from "./api/upload";
+import { videosRouter } from "./api/videos";
 
 /**
  * Hono application type that wires the generated `Env` bindings and the
@@ -101,6 +102,16 @@ app.use(cloudflareAccess({ policies: authPolicies }));
  * See `src/api/upload.ts` for full documentation of each endpoint.
  */
 app.route("/api/videos", uploadRouter);
+
+/**
+ * Video read routes: `GET /api/videos` and `GET /api/videos/:id`.
+ *
+ * Mounted at the same path prefix as `uploadRouter` — no conflict because
+ * all routes in `videosRouter` use `GET` while `uploadRouter` uses `POST`.
+ *
+ * See `src/api/videos.ts` for full documentation of each endpoint.
+ */
+app.route("/api/videos", videosRouter);
 
 // ---------------------------------------------------------------------------
 // Public routes
