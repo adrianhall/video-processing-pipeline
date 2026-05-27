@@ -4,6 +4,7 @@
   "description": "A video processing pipeline app for Cloudflare Workers",
   "license": "MIT",
   "private": true,
+  "type": "module",
   "scripts": {
     "generate:types": "generate-types -- --strict-vars=false",
     "check": "run-s check:*",
