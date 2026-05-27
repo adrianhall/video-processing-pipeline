@@ -2,6 +2,9 @@
 ### GIT Ignore Instructions
 ###
 
+### <!-- Build output -->
+public/
+
 ### <!-- ENVIRONMENT -->
 .dev.vars
 .env
