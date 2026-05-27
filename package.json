@@ -7,10 +7,12 @@
   "scripts": {
     "check": "run-s check:*",
     "check:biome": "biome check .",
-    "check:markdown": "markdownlint-cli2 '**/*.md' '#node_modules'",
+    "check:infra": "terraform -chdir=infra validate",
+    "check:markdown": "markdownlint-cli2 'docs/**/*.md' '#node_modules'",
     "check:types": "tsc -b --noEmit",
     "fix": "run-s fix:*",
     "fix:biome": "biome check --write .",
+    "fix:infra": "terraform -chdir=infra fmt",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "build": "run-s build:*",
