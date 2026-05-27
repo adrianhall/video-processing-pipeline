@@ -24,8 +24,6 @@ import {
   type PathPolicy,
 } from "@adrianhall/cloudflare-auth";
 import { Hono } from "hono";
-import { statusRouter } from "./api/status";
-import { uploadRouter } from "./api/upload";
 import { videosRouter } from "./api/videos";
 
 /**
@@ -67,10 +65,10 @@ const authPolicies: PathPolicy[] = [
 /**
  * Root Hono application.
  *
- * Sub-routers for individual API resource groups (videos, upload, status)
- * will be mounted into this app in later issues.  The catch-all at the
- * bottom forwards every unmatched `GET` request to the Worker Assets binding
- * so the React SPA handles client-side routing.
+ * All `/api/videos` routes are handled by the single `videosRouter` (see
+ * `src/api/videos.ts`).  The catch-all at the bottom forwards every unmatched
+ * `GET` request to the Worker Assets binding so the React SPA handles
+ * client-side routing.
  *
  * @example
  * ```ts
@@ -98,32 +96,13 @@ app.use(cloudflareAccess({ policies: authPolicies }));
 // ---------------------------------------------------------------------------
 
 /**
- * Upload initiation routes: `POST /api/videos` and `POST /api/videos/:id/process`.
- *
- * See `src/api/upload.ts` for full documentation of each endpoint.
- */
-app.route("/api/videos", uploadRouter);
-
-/**
- * Video read routes: `GET /api/videos` and `GET /api/videos/:id`.
- *
- * Mounted at the same path prefix as `uploadRouter` — no conflict because
- * all routes in `videosRouter` use `GET` while `uploadRouter` uses `POST`.
+ * All `/api/videos` routes: upload initiation, video CRUD, workflow status,
+ * and R2 streaming.  Routes are registered in specificity order within
+ * `videosRouter` so `/:id/status` and `/:id/stream` are matched before `/:id`.
  *
  * See `src/api/videos.ts` for full documentation of each endpoint.
  */
 app.route("/api/videos", videosRouter);
-
-/**
- * Workflow status route: `GET /api/videos/:id/status`.
- *
- * Returns combined D1 pipeline status and live Cloudflare Workflow instance
- * status for a given video.  Consumed by the frontend polling mechanism to
- * show real-time processing progress.
- *
- * See `src/api/status.ts` for full documentation of the endpoint.
- */
-app.route("/api/videos", statusRouter);
 
 // ---------------------------------------------------------------------------
 // Public routes
