@@ -24,8 +24,8 @@
     "postteardown": "shx rm -f wrangler.jsonc",
     "predeploy": "run-s build db:migrate:remote",
     "deploy": "wrangler deploy",
-    "db:migrate:remote": "echo 'no migrations yet'",
-    "db:migrate:local": "echo 'no migrations yet'",
+    "db:migrate:remote": "wrangler d1 migrations apply video-pipeline-db",
+    "db:migrate:local": "wrangler d1 migrations apply video-pipeline-db --local",
     "prestart": "run-s build db:migrate:local",
     "start": "wrangler dev"
   },
