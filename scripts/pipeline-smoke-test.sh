@@ -147,11 +147,13 @@ echo ""
 # ---------------------------------------------------------------------------
 
 echo "Test 1: POST /api/videos — register ${VIDEO_FILENAME}"
-response=$(curl -sf \
+echo "  → POST ${BASE}/api/videos  body={\"filename\":\"${VIDEO_FILENAME}\"}"
+response=$(curl -s \
   -X POST "${BASE}/api/videos" \
   -H "$AUTH_HEADER" \
   -H "Content-Type: application/json" \
   -d "{\"filename\":\"${VIDEO_FILENAME}\"}")
+echo "  ← $response"
 
 VIDEO_ID=$(echo "$response" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
 UPLOAD_URL=$(echo "$response" | grep -o '"upload_url":"[^"]*"' | cut -d'"' -f4)
@@ -172,10 +174,15 @@ fi
 # ---------------------------------------------------------------------------
 
 echo "Test 2: PUT ${VIDEO_FILENAME} to R2 via presigned URL"
-r2_status=$(curl -s -o /dev/null -w "%{http_code}" \
+echo "  → PUT [presigned R2 URL]  Content-Type: ${VIDEO_MIME}  size: ${VIDEO_SIZE}"
+_r2_tmp=$(mktemp)
+r2_status=$(curl -s -w "%{http_code}" \
   -X PUT "$UPLOAD_URL" \
   -H "Content-Type: ${VIDEO_MIME}" \
-  --data-binary "@${VIDEO_FILE}")
+  --data-binary "@${VIDEO_FILE}" \
+  -o "$_r2_tmp")
+_r2_body=$(cat "$_r2_tmp"); rm -f "$_r2_tmp"
+echo "  ← HTTP $r2_status${_r2_body:+  body: $_r2_body}"
 check_status "PUT presigned R2 URL" "200" "$r2_status"
 
 # ---------------------------------------------------------------------------
@@ -183,9 +190,14 @@ check_status "PUT presigned R2 URL" "200" "$r2_status"
 # ---------------------------------------------------------------------------
 
 echo "Test 3: POST /api/videos/${VIDEO_ID}/process — start pipeline"
-proc_status=$(curl -s -o /dev/null -w "%{http_code}" \
+echo "  → POST ${BASE}/api/videos/${VIDEO_ID}/process"
+_proc_tmp=$(mktemp)
+proc_status=$(curl -s -w "%{http_code}" \
   -X POST "${BASE}/api/videos/${VIDEO_ID}/process" \
-  -H "$AUTH_HEADER")
+  -H "$AUTH_HEADER" \
+  -o "$_proc_tmp")
+_proc_body=$(cat "$_proc_tmp"); rm -f "$_proc_tmp"
+echo "  ← HTTP $proc_status  $_proc_body"
 check_status "POST /api/videos/:id/process" "200" "$proc_status"
 
 # ---------------------------------------------------------------------------
@@ -202,13 +214,20 @@ final_status=""
 last_status=""
 
 while [ "$elapsed" -lt "$POLL_TIMEOUT" ]; do
-  video_json=$(curl -sf "${BASE}/api/videos/${VIDEO_ID}" -H "$AUTH_HEADER" 2>/dev/null || echo "")
+  video_json=$(curl -s "${BASE}/api/videos/${VIDEO_ID}" -H "$AUTH_HEADER" 2>/dev/null || echo "")
   current_status=$(echo "$video_json" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
 
-  # Print a progress line whenever status changes
-  if [ "$current_status" != "$last_status" ] && [ -n "$current_status" ]; then
-    printf "  [%3ds] status changed: %s → %s\n" "$elapsed" "${last_status:-started}" "$current_status"
+  if [ -z "$video_json" ]; then
+    printf "  [%3ds] WARNING: empty response from GET /api/videos/:id\n" "$elapsed"
+  elif [ "$current_status" != "$last_status" ] && [ -n "$current_status" ]; then
+    # Status changed — print prominently and dump the full record so the
+    # error_message (and any other field) is visible without extra queries.
+    printf "  [%3ds] *** STATUS CHANGE: %s → %s ***\n" "$elapsed" "${last_status:-started}" "$current_status"
+    printf "         %s\n" "$video_json"
     last_status="$current_status"
+  else
+    # No change — print a heartbeat so the terminal doesn't look frozen.
+    printf "  [%3ds] %s\n" "$elapsed" "${current_status:-unknown}"
   fi
 
   if [ "$current_status" = "complete" ] || [ "$current_status" = "error" ]; then
@@ -232,10 +251,13 @@ echo "Test 5: Verify final status = \"complete\"  [ISSUE-18: finalize step]"
 if [ "$final_status" = "complete" ]; then
   pass "Pipeline status: complete"
 else
-  # Retrieve error details to make failures easier to diagnose
-  err_json=$(curl -sf "${BASE}/api/videos/${VIDEO_ID}" -H "$AUTH_HEADER" 2>/dev/null || echo "")
-  err_msg=$(echo "$err_json" | grep -o '"error_message":"[^"]*"' | cut -d'"' -f4)
-  fail "Pipeline ended in status '${final_status}'. error_message: ${err_msg:-none}"
+  # Fetch the final video record and print it in full so every field —
+  # including the complete error_message — is visible without extra queries.
+  # (The grep approach used elsewhere truncates at the first embedded quote.)
+  _err_json=$(curl -s "${BASE}/api/videos/${VIDEO_ID}" -H "$AUTH_HEADER" 2>/dev/null || echo "")
+  echo "  Final video record:"
+  echo "  $_err_json"
+  fail "Pipeline ended in status '${final_status}'"
 fi
 
 # ---------------------------------------------------------------------------
@@ -243,7 +265,8 @@ fi
 # ---------------------------------------------------------------------------
 
 echo "Test 6: Verify stream_url in API response  [ISSUE-18: Stream upload step]"
-video_json=$(curl -sf "${BASE}/api/videos/${VIDEO_ID}" -H "$AUTH_HEADER")
+video_json=$(curl -s "${BASE}/api/videos/${VIDEO_ID}" -H "$AUTH_HEADER" 2>/dev/null || echo "")
+echo "  ← $video_json"
 stream_url=$(echo "$video_json" | grep -o '"stream_url":"[^"]*"' | cut -d'"' -f4)
 check_nonempty "stream_url" "$stream_url"
 
@@ -268,6 +291,7 @@ else
     --config wrangler.jsonc \
     --command "SELECT r2_video_key, r2_audio_key, r2_bw_key, stream_video_id FROM videos WHERE id='${VIDEO_ID}'" \
     --json 2>/dev/null || echo "[]")
+  echo "  D1 query result: $d1_json"
 
   r2_video_key=$(echo "$d1_json" | grep -o '"r2_video_key":"[^"]*"' | cut -d'"' -f4)
   r2_audio_key=$(echo "$d1_json" | grep -o '"r2_audio_key":"[^"]*"' | cut -d'"' -f4)
