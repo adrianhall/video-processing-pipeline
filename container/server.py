@@ -223,6 +223,58 @@ def _upload(url: str, src: str, content_type: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Audio stream probe helper
+# ---------------------------------------------------------------------------
+
+
+def _has_audio_stream(path: str) -> bool:
+    """Return True if the file at ``path`` contains at least one audio stream.
+
+    Uses ``ffprobe`` to inspect the container without decoding it.  If ffprobe
+    itself fails (corrupt file, timeout, unexpected error), returns ``True`` so
+    that the caller falls through to ffmpeg and gets a real diagnostic error
+    rather than silently skipping a file that might actually have audio.
+
+    Args:
+        path: Local filesystem path to the video file to probe.
+
+    Returns:
+        ``True`` if at least one audio stream is present; ``False`` if the file
+        is video-only (no audio track).
+
+    Example:
+        >>> _has_audio_stream("/tmp/video-only.mp4")
+        False
+        >>> _has_audio_stream("/tmp/with-audio.mp4")
+        True
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "quiet",
+                "-select_streams", "a:0",           # first audio stream only
+                "-show_entries", "stream=codec_type",
+                "-of", "csv=p=0",
+                path,
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        has_audio = bool(result.stdout.strip())
+        app.logger.info("[probe] %s — audio stream present: %s", path, has_audio)
+        if result.stderr:
+            app.logger.debug("[probe] ffprobe stderr: %s",
+                             result.stderr.decode("utf-8", errors="replace")[:500])
+        return has_audio
+    except Exception as exc:
+        # On any ffprobe failure, optimistically assume audio is present so
+        # ffmpeg runs and produces a real diagnostic error if needed.
+        app.logger.warning("[probe] ffprobe failed (%s) — assuming audio present", exc)
+        return True
+
+
+# ---------------------------------------------------------------------------
 # Shared ffmpeg job runner
 # ---------------------------------------------------------------------------
 
@@ -232,6 +284,7 @@ def _run_ffmpeg_job(
     output_ext: str,
     build_cmd: Callable[[str, str], list[str]],
     output_content_type: str,
+    check_audio_stream: bool = False,
 ) -> Response:
     """Core handler shared by /transcode, /extract-audio, and /grayscale.
 
@@ -259,12 +312,22 @@ def _run_ffmpeg_job(
             list as ``list[str]``.
         output_content_type: MIME type used in the ``Content-Type`` header
             when uploading the output file to the presigned PUT URL.
+        check_audio_stream: When ``True``, run ``ffprobe`` after downloading
+            the input to verify at least one audio stream is present.  If no
+            audio is found, return ``{"ok": true, "skipped": "no_audio_stream"}``
+            immediately without running ffmpeg or uploading anything.  Set this
+            for the ``/extract-audio`` endpoint so that video-only inputs
+            (no audio track) do not cause a fatal ffmpeg error — the pipeline
+            step is simply a no-op and execution continues to the next step.
 
     Returns:
         A Flask ``Response`` with JSON body and the appropriate HTTP status:
 
         - ``200`` — ffmpeg succeeded; body is
           ``{"ok": true, "duration_seconds": <float>}``.
+        - ``200`` — audio probe found no audio stream (only when
+          ``check_audio_stream=True``); body is
+          ``{"ok": true, "duration_seconds": <float>, "skipped": "no_audio_stream"}``.
         - ``400`` — request body is missing or malformed.
         - ``500`` — ffmpeg exited with a non-zero return code; body includes
           the last 2000 characters of stderr.
@@ -296,6 +359,27 @@ def _run_ffmpeg_job(
         # ── Step 1/3: download input ──────────────────────────────
         app.logger.info("[job] step 1/3 — download input")
         input_bytes = _download(input_url, input_path)
+
+        # ── Step 1b/3: optional audio stream probe ────────────────
+        # Only used by /extract-audio. If the transcoded MP4 has no audio
+        # track (video-only source), ffmpeg would fail with exit 234 and
+        # "Output file does not contain any stream". We detect this early
+        # with ffprobe and return a successful no-op so the Workflow step
+        # does not throw and the pipeline continues to grayscale.
+        if check_audio_stream:
+            app.logger.info("[job] step 1b/3 — probing for audio streams")
+            if not _has_audio_stream(input_path):
+                elapsed = time.monotonic() - wall_start
+                app.logger.info(
+                    "[job] no audio stream in input — skipping extraction "
+                    "(r2_audio_key will be recorded in D1 but file will not "
+                    "be uploaded to R2)"
+                )
+                return jsonify({
+                    "ok": True,
+                    "duration_seconds": elapsed,
+                    "skipped": "no_audio_stream",
+                })
 
         # ── Step 2/3: run ffmpeg ──────────────────────────────────
         cmd = build_cmd(input_path, output_path)
@@ -473,6 +557,10 @@ def extract_audio() -> Response:
             "-y", out,
         ],
         output_content_type="audio/mpeg",
+        # Probe for audio before running ffmpeg. If the input has no audio
+        # stream (video-only), skip gracefully instead of failing with exit
+        # code 234 "Output file does not contain any stream".
+        check_audio_stream=True,
     )
 
 

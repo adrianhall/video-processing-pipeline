@@ -286,7 +286,7 @@ treat it as a property of type `string | number`, not a callable method.
 
 **Decision**: Added a module-level `_UNVERIFIED_SSL_CTX` (`ssl.CERT_NONE`) in `container/server.py` and passed it to all `urllib.request.urlopen()` calls in `_download` and `_upload`.
 
-**Reason**: When running under `wrangler dev`, outbound HTTPS traffic from Docker containers is routed through wrangler's local networking proxy. This proxy performs TLS interception and presents a self-signed certificate. Python's `urllib` rejects self-signed certificates by default with `SSLCertVerificationError: certificate verify failed: self-signed certificate in certificate chain`.
+**Reason**: When running under `wrangler dev`, a `cloudflare/proxy-everything` sidecar container is automatically started alongside the application container. This sidecar intercepts ALL outbound TCP from Docker containers (including HTTPS) and routes it through wrangler's local Cloudflare simulation environment, performing TLS interception with a self-signed certificate. Python's `urllib` rejects self-signed certificates by default with `SSLCertVerificationError: certificate verify failed: self-signed certificate in certificate chain`.
 
 The R2 presigned URLs used by `_download` and `_upload` are authenticated via HMAC-SHA256 signatures embedded in the URL query parameters (`X-Amz-Signature`). The security guarantee for these calls comes from the signature, not from TLS certificate verification — an attacker who could intercept the TLS connection would still need the R2 secret key to forge a valid presigned URL. Disabling certificate verification for these specific calls does not meaningfully reduce security.
 
