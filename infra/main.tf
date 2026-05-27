@@ -11,6 +11,7 @@ locals {
   api_token      = data.dotenv.env.env.CLOUDFLARE_API_TOKEN
   workers_domain = data.dotenv.env.env.CLOUDFLARE_WORKERS_DOMAIN
   team_domain    = data.dotenv.env.env.CLOUDFLARE_TEAM_DOMAIN
+  idp_id         = data.dotenv.env.env.CLOUDFLARE_IDP_ID
 }
 
 # ── Provider ──────────────────────────────────────────────────────────────────
@@ -107,6 +108,53 @@ resource "cloudflare_account_token" "r2_token" {
     resources = jsonencode({
       "com.cloudflare.api.account.${local.account_id}" = "*"
     })
+  }]
+}
+
+# ── Cloudflare Access Policy ──────────────────────────────────────────────────
+# Standalone (non-embedded) account-level policy that allows any user who
+# authenticates through the configured identity provider. Keeping the policy
+# separate from the application is the v5-recommended pattern; embedding
+# policies inside cloudflare_zero_trust_access_application is deprecated.
+#
+# The policy is intentionally open (any IdP user) so the demo works for
+# anyone who sets up their own IdP. Lock this down in production by adding
+# an email_domain or group rule to the include block.
+
+resource "cloudflare_zero_trust_access_policy" "allow_idp" {
+  account_id = local.account_id
+  name       = "video-pipeline-allow-idp"
+  decision   = "allow"
+
+  include = [{
+    login_method = {
+      id = local.idp_id
+    }
+  }]
+}
+
+# ── Cloudflare Access Application ─────────────────────────────────────────────
+# Self-hosted application that protects the Worker's workers.dev URL.
+# References the standalone policy above via the policies list.
+#
+# auto_redirect_to_identity: true skips the IdP selection page because only
+# one IdP is allowed, sending users directly to their SSO login event.
+#
+# The `aud` attribute is exported as a sensitive Terraform output so it can
+# be used for additional JWT validation if needed (see outputs.tf).
+
+resource "cloudflare_zero_trust_access_application" "video_pipeline_app" {
+  account_id                = local.account_id
+  name                      = "Video Pipeline"
+  domain                    = "${cloudflare_worker.worker.name}.${local.workers_domain}"
+  type                      = "self_hosted"
+  session_duration          = "24h"
+  allowed_idps              = [local.idp_id]
+  auto_redirect_to_identity = true
+
+  policies = [{
+    id         = cloudflare_zero_trust_access_policy.allow_idp.id
+    precedence = 1
   }]
 }
 

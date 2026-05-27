@@ -66,3 +66,9 @@ output "stream_token_value" {
   value       = cloudflare_account_token.stream_token.value
   sensitive   = true
 }
+
+output "access_aud" {
+  description = "Audience tag for the Cloudflare Access application protecting the Worker. Used to verify the `aud` claim in Access JWTs during local debugging or additional validation layers."
+  value       = cloudflare_zero_trust_access_application.video_pipeline_app.aud
+  sensitive   = true
+}

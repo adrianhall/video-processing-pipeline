@@ -157,6 +157,67 @@ while retaining the ability to commit any committed placeholder files.
 
 ---
 
+## Cloudflare Access: separated policy + application (v5 non-embedded pattern)
+
+**Decision**: Added a standalone `cloudflare_zero_trust_access_policy` resource and a
+`cloudflare_zero_trust_access_application` resource. The policy is referenced from the
+application via the `policies` list (by `id` + `precedence`). The application's inline
+`policies` block (embedded directly inside `cloudflare_zero_trust_access_application`)
+was deliberately not used.
+
+**Reason**: The Terraform v5 provider documentation and Cloudflare changelog explicitly
+mark the embedded policy approach as deprecated. The separated pattern creates a reusable
+account-level policy resource that can be attached to multiple applications and managed
+independently. Additionally, the v5.5.0 changelog lists
+`cloudflare_zero_trust_access_application` as having had recurring-diff fixes, and the
+embedded block was one of the affected patterns.
+
+**Policy rule**: The `include` block uses `login_method` (IdP authentication) rather
+than `email_domain` so the demo works for anyone who configures their own IdP. Production
+deployments should add a more restrictive rule (e.g., `email_domain` or a group).
+
+**`access_aud` output**: The Access application's audience tag is exported as a sensitive
+Terraform output (`access_aud`). It is not injected into `wrangler.jsonc` because
+`cloudflare-auth` validates JWTs against the team domain's JWKS endpoint without
+requiring the AUD to be a Worker var. The output is available for manual JWT debugging
+or future additional validation layers.
+
+**Required API token permission**: `Access: Apps and Policies Write` (under
+Cloudflare One / Zero Trust → Access in the dashboard) must be added to the deployment
+API token in `.env`. This permission is documented in `.env.example`.
+
+---
+
+## Switch from local `generate-types.js` to `generate-types` CLI (cloudflare-scripts v1.0.1)
+
+**Decision**: Removed `scripts/generate-types.js` and switched to the `generate-types`
+CLI from `@adrianhall/cloudflare-scripts` (pinned to `#v1.0.1`). Updated the
+`generate:types` script in `package.json` to `generate-types -- --strict-vars=false`.
+
+**Reason**: The `generate-types` CLI is the upstream-maintained version of the same
+freshness-check logic. Maintaining a local copy is unnecessary duplication and means
+manual porting of any upstream improvements.
+
+**`worker-configuration.d.ts` moved to project root**: The file is now generated at
+`./worker-configuration.d.ts` (alongside `wrangler.jsonc`) rather than
+`src/worker-configuration.d.ts`. This lets `generate-types` use its standard freshness
+check (comparing mtime of `wrangler.jsonc` vs `worker-configuration.d.ts` in the same
+directory) without any `-d` flag gymnastics.
+
+**`src/tsconfig.json` include change**: Added `"../worker-configuration.d.ts"` to the
+`include` array so the `src` TypeScript project still picks up the generated `Env`
+interface and workerd runtime types. TypeScript's `rootDir` constraint does not apply to
+`.d.ts` declaration input files — only to emittable `.ts` source files — so this is
+safe with `composite: true`.
+
+**`biome.json` exclusion updated**: Changed `!src/worker-configuration.d.ts` to
+`!worker-configuration.d.ts` to match the new root-level path.
+
+**`postteardown` cleanup**: Added `worker-configuration.d.ts` to the `shx rm -f`
+command so the generated types file is removed alongside `wrangler.jsonc` on teardown.
+
+---
+
 ## ISSUE-01/02: check:markdown scope narrowed to docs/**/*.md
 
 **Decision**: The `check:markdown` script was changed from `'**/*.md' '#node_modules'` to `'docs/**/*.md' '#node_modules'` (by the operator, during ISSUE-02 execution).
