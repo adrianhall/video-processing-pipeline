@@ -40,5 +40,9 @@
     "typescript": "^6.0.3",
     "vitest": "^4.1.7",
     "wrangler": "^4.95.0"
+  },
+  "dependencies": {
+    "@adrianhall/cloudflare-auth": "github:adrianhall/cloudflare-auth#1.0.1",
+    "hono": "^4.12.23"
   }
 }
