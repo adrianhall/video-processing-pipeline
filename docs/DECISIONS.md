@@ -4,13 +4,19 @@ Records variances from the plan and reasons. Each entry includes the issue where
 
 ---
 
-## ISSUE-02: Cloudflare provider v5 API token data source rename
+## ISSUE-02: Account-level tokens and permission group lookups required
 
-**Decision**: Used `cloudflare_api_token_permission_groups_list` (with URL-encoded `name` parameter) instead of `cloudflare_api_token_permission_groups` as specified in the issue.
+**Decision**: Used `cloudflare_account_token` (not `cloudflare_api_token`) and `cloudflare_account_api_token_permission_groups_list` (not `cloudflare_api_token_permission_groups`) for all token creation and permission lookups.
 
-**Reason**: The `cloudflare_api_token_permission_groups` data source was removed in the Cloudflare Terraform provider v5. The v5-native replacement is `cloudflare_api_token_permission_groups_list`, which filters by URL-encoded `name` and returns a `result` list. Each permission group is referenced as `result[0].id`.
+**Reason**: Three separate issues were discovered when attempting `npm run provision` with the user-level variants:
 
-**Implication**: Future issues referencing permission groups via Terraform must use `cloudflare_api_token_permission_groups_list` with URL-encoded names (spaces → `%20`). The `result[0].id` access pattern is also slightly different from the v4 map-based access (`data.cloudflare_api_token_permission_groups.all.account["Name"]`).
+1. **`cloudflare_api_token_permission_groups` removed in v5** — the data source no longer exists; the v5 replacement is either `cloudflare_api_token_permission_groups_list` (user-level) or `cloudflare_account_api_token_permission_groups_list` (account-level).
+
+2. **User-level endpoint 403** — `cloudflare_api_token_permission_groups_list` calls `/v4/user/tokens/permission_groups`, which requires a Global API Key or a user-level token with "API Tokens" permission. A scoped account API token (the typical `.env` deployment credential) cannot authenticate to this endpoint and returns `403 "Valid user-level authentication not found"`. The account-level data source calls `/v4/accounts/{id}/tokens/permission_groups` instead, which works with account-scoped tokens.
+
+3. **Double URL-encoding** — the `name` parameter must be passed as plain text (`Workers R2 Storage Write`). The Terraform HTTP client URL-encodes query parameters automatically. Passing pre-encoded values (e.g. `Workers%20R2%20Storage%20Write`) results in double-encoding (`%2520`) which causes the filter to return no results.
+
+**Implication**: The deployment API token in `.env` must have `Account API Tokens Write` permission (to create `cloudflare_account_token` resources) rather than user-level `API Tokens Write`. Permission group names in `cloudflare_account_api_token_permission_groups_list` must be plain text, not URL-encoded. `result[0].id` is used to reference the looked-up permission group ID.
 
 ---
 

@@ -51,18 +51,18 @@ output "workers_domain" {
 
 output "r2_token_id" {
   description = "R2 API token ID, used as the S3-compatible Access Key ID for presigned URL generation."
-  value       = cloudflare_api_token.r2_token.id
+  value       = cloudflare_account_token.r2_token.id
   sensitive   = true
 }
 
 output "r2_token_value" {
   description = "R2 API token value, used as the S3-compatible Secret Access Key for presigned URL generation."
-  value       = cloudflare_api_token.r2_token.value
+  value       = cloudflare_account_token.r2_token.value
   sensitive   = true
 }
 
 output "stream_token_value" {
   description = "Stream API token value, used as the Bearer token for the Stream copy-from-URL API calls made by VideoProcessingWorkflow."
-  value       = cloudflare_api_token.stream_token.value
+  value       = cloudflare_account_token.stream_token.value
   sensitive   = true
 }

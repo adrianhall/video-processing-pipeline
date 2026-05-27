@@ -21,17 +21,25 @@ provider "cloudflare" {
 
 # ── Permission Group Lookups ──────────────────────────────────────────────────
 # Look up each required permission group by name so we can reference its ID
-# when creating the R2 and Stream API tokens below.
+# when creating the R2 and Stream tokens below.
 #
-# NOTE: The `name` parameter must be URL-encoded (spaces → %20).
-# Each data source returns a `result` list; we take `result[0].id`.
+# Uses the account-level data source (cloudflare_account_api_token_permission_groups_list)
+# rather than the user-level one (cloudflare_api_token_permission_groups_list), because
+# the deployment API token in .env is account-scoped. The user-level endpoint returns
+# 403 "Valid user-level authentication not found" for account-scoped tokens.
+#
+# The `name` parameter is passed as plain text — the provider URL-encodes it before
+# sending the HTTP request. Passing a pre-encoded value (e.g. "Workers%20R2...") causes
+# double-encoding (%2520) and the filter returns no results.
 
-data "cloudflare_api_token_permission_groups_list" "r2_storage_write" {
-  name = "Workers%20R2%20Storage%20Write"
+data "cloudflare_account_api_token_permission_groups_list" "r2_storage_write" {
+  account_id = local.account_id
+  name       = "Workers R2 Storage Write"
 }
 
-data "cloudflare_api_token_permission_groups_list" "stream_write" {
-  name = "Stream%20Write"
+data "cloudflare_account_api_token_permission_groups_list" "stream_write" {
+  account_id = local.account_id
+  name       = "Stream Write"
 }
 
 # ── Worker Registration ───────────────────────────────────────────────────────
@@ -81,14 +89,20 @@ resource "cloudflare_r2_bucket" "bucket" {
 #
 # token.id    → R2 S3 Access Key ID  (R2_ACCESS_KEY_ID wrangler var)
 # token.value → R2 S3 Secret Key     (R2_SECRET_ACCESS_KEY wrangler var)
+#
+# Uses cloudflare_account_token (account-scoped) rather than cloudflare_api_token
+# (user-scoped). The deployment API token in .env is account-scoped, so it has
+# the "Account API Tokens Write" permission required to create account tokens,
+# but not the user-level "API Tokens Write" permission required to create user tokens.
 
-resource "cloudflare_api_token" "r2_token" {
-  name = "video-pipeline-r2"
+resource "cloudflare_account_token" "r2_token" {
+  account_id = local.account_id
+  name       = "video-pipeline-r2"
 
   policies = [{
     effect = "allow"
     permission_groups = [{
-      id = data.cloudflare_api_token_permission_groups_list.r2_storage_write.result[0].id
+      id = data.cloudflare_account_api_token_permission_groups_list.r2_storage_write.result[0].id
     }]
     resources = jsonencode({
       "com.cloudflare.api.account.${local.account_id}" = "*"
@@ -102,13 +116,14 @@ resource "cloudflare_api_token" "r2_token" {
 #
 # token.value → CF_API_TOKEN wrangler var (Bearer token for Stream REST API)
 
-resource "cloudflare_api_token" "stream_token" {
-  name = "video-pipeline-stream"
+resource "cloudflare_account_token" "stream_token" {
+  account_id = local.account_id
+  name       = "video-pipeline-stream"
 
   policies = [{
     effect = "allow"
     permission_groups = [{
-      id = data.cloudflare_api_token_permission_groups_list.stream_write.result[0].id
+      id = data.cloudflare_account_api_token_permission_groups_list.stream_write.result[0].id
     }]
     resources = jsonencode({
       "com.cloudflare.api.account.${local.account_id}" = "*"
