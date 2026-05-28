@@ -638,6 +638,33 @@ redirect through `developerAuthentication`.
 
 ---
 
+## ISSUE-25: requestId implemented via app.onError, not per-route
+
+**Decision**: The `requestId` for error correlation is generated in a logging middleware
+(`app.use`) and surfaced to clients only through `app.onError` — the global Hono error
+handler that fires when a route handler or middleware *throws* an unhandled exception.
+The per-route explicit error returns in `src/api/videos.ts` (e.g.
+`return c.json({ error: "Video not found" }, 404)`) were **not** modified to include
+`requestId`.
+
+**Reason**: Adding `requestId` to every explicit return in `videos.ts` would require
+touching ~15 individual call sites, each of which already has a clear, domain-specific
+error message (404, 400, 500). The value of `requestId` for those cases is low — the
+error messages are deterministic and already include enough context (video ID, field
+name, status string) for debugging. The high-value case is an unexpected 500 thrown by
+a bug in the route logic itself; `app.onError` handles exactly that case. The per-request
+`requestId` is also included in every request log line emitted by the logging middleware,
+so all log lines for a given request can be correlated even without the `requestId`
+appearing in the response body.
+
+**Implication**: Clients that receive a 4xx/5xx response from a named route handler will
+not see a `requestId` in the body. A future improvement could extract the `requestId`
+from `c.get("requestId")` inside each route handler, but that requires modifying the
+`AppEnv` `Variables` type to be visible in `videos.ts` (currently `AppEnv` is defined
+in `index.ts`). The simplest path is to move `AppEnv` to a shared `types.ts` import.
+
+---
+
 ## ISSUE-01/02: check:markdown scope narrowed to docs/**/*.md
 
 **Decision**: The `check:markdown` script was changed from `'**/*.md' '#node_modules'` to `'docs/**/*.md' '#node_modules'` (by the operator, during ISSUE-02 execution).

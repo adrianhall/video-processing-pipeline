@@ -156,11 +156,29 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
       // This step is intentionally lightweight — just a single D1 UPDATE.
       // If it fails (e.g. a transient D1 error) Workflows retries it automatically.
       await step.do("register", async () => {
+        console.log(
+          JSON.stringify({
+            step: "register",
+            videoId,
+            status: "started",
+            timestamp: new Date().toISOString(),
+          }),
+        );
+
         await this.env.DB.prepare(
           "UPDATE videos SET status = ?, updated_at = ? WHERE id = ?",
         )
           .bind("processing", new Date().toISOString(), videoId)
           .run();
+
+        console.log(
+          JSON.stringify({
+            step: "register",
+            videoId,
+            status: "completed",
+            timestamp: new Date().toISOString(),
+          }),
+        );
       });
 
       // =======================================================================
@@ -193,6 +211,15 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
         "transcode",
         { retries: { limit: 3, delay: "10 seconds" } },
         async () => {
+          console.log(
+            JSON.stringify({
+              step: "transcode",
+              videoId,
+              status: "started",
+              timestamp: new Date().toISOString(),
+            }),
+          );
+
           // Mark the video as actively transcoding so the UI reflects the current
           // pipeline stage immediately, even before the container is warm.
           await this.env.DB.prepare(
@@ -302,6 +329,15 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
           )
             .bind(outputKey, new Date().toISOString(), videoId)
             .run();
+
+          console.log(
+            JSON.stringify({
+              step: "transcode",
+              videoId,
+              status: "completed",
+              timestamp: new Date().toISOString(),
+            }),
+          );
         },
       );
 
@@ -330,6 +366,15 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
         "extract-audio",
         { retries: { limit: 3, delay: "10 seconds" } },
         async () => {
+          console.log(
+            JSON.stringify({
+              step: "extract-audio",
+              videoId,
+              status: "started",
+              timestamp: new Date().toISOString(),
+            }),
+          );
+
           // Mark the video as actively extracting audio so the UI reflects the
           // current pipeline stage immediately.
           await this.env.DB.prepare(
@@ -381,6 +426,15 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
           )
             .bind(outputKey, new Date().toISOString(), videoId)
             .run();
+
+          console.log(
+            JSON.stringify({
+              step: "extract-audio",
+              videoId,
+              status: "completed",
+              timestamp: new Date().toISOString(),
+            }),
+          );
         },
       );
 
@@ -412,6 +466,15 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
         "grayscale",
         { retries: { limit: 3, delay: "10 seconds" } },
         async () => {
+          console.log(
+            JSON.stringify({
+              step: "grayscale",
+              videoId,
+              status: "started",
+              timestamp: new Date().toISOString(),
+            }),
+          );
+
           // Mark the video as actively converting to grayscale so the UI reflects
           // the current pipeline stage immediately, before the container call begins.
           await this.env.DB.prepare(
@@ -463,6 +526,15 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
           )
             .bind(outputKey, new Date().toISOString(), videoId)
             .run();
+
+          console.log(
+            JSON.stringify({
+              step: "grayscale",
+              videoId,
+              status: "completed",
+              timestamp: new Date().toISOString(),
+            }),
+          );
         },
       );
 
@@ -492,6 +564,15 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
       // D1 status after this step: "complete"
       // Cleanup: r2IncomingKey deleted from BUCKET
       await step.do("finalize", async () => {
+        console.log(
+          JSON.stringify({
+            step: "finalize",
+            videoId,
+            status: "started",
+            timestamp: new Date().toISOString(),
+          }),
+        );
+
         // Delete the raw incoming file from R2.  It has now been transcoded,
         // audio-extracted, and converted to grayscale — keeping it would
         // waste R2 storage without adding value.  R2 delete is idempotent:
@@ -506,6 +587,15 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
         )
           .bind("complete", new Date().toISOString(), videoId)
           .run();
+
+        console.log(
+          JSON.stringify({
+            step: "finalize",
+            videoId,
+            status: "completed",
+            timestamp: new Date().toISOString(),
+          }),
+        );
       });
     } catch (err) {
       // -----------------------------------------------------------------------
