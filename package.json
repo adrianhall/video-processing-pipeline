@@ -37,8 +37,17 @@
     "start": "wrangler dev",
     "teardown": "terraform -chdir=infra destroy -auto-approve",
     "postteardown": "shx rm -f wrangler.jsonc worker-configuration.d.ts",
-    "pretest": "wrangler types --config wrangler.test.jsonc --strict-vars=false",
+    "pretest": "run-s generate:types:test",
     "test": "vitest run",
+    "pretest:worker": "run-s generate:types:test",
+    "test:worker": "vitest run --project worker",
+    "pretest:ui": "run-s generate:types:test",
+    "test:ui": "vitest run --project ui",
+    "pretest:container": "run-s generate:types:test",
+    "test:container": "vitest run --project container",
+    "pretest:integration": "run-s generate:types:test",
+    "test:integration": "vitest run --project integration",
+    "pretest:coverage": "run-s generate:types:test",
     "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
