@@ -569,6 +569,75 @@ the original audio stream).
 
 ---
 
+## ISSUE-24: npm workspaces required to prevent duplicate React instances
+
+**Decision**: Added `"workspaces": ["ui"]` to root `package.json` and pinned
+`react@18.3.1` and `react-dom@18.3.1` (exact, no `^`) in both root and
+`ui/package.json`.
+
+**Reason**: React's hook dispatcher is stored in a module-level
+`ReactSharedInternals` object. When two physically separate copies of React
+exist — even at the same version — each has its own `ReactSharedInternals`.
+`react-dom` sets the dispatcher on one instance; if a component calls
+`useContext` from the other instance, the dispatcher is `null` and hooks throw
+`"Cannot read properties of null (reading 'useContext')"`.
+
+Without workspaces, `npm install` at root and `npm --prefix ./ui install`
+both install `react@18.3.1`, but into `node_modules/react` and
+`ui/node_modules/react` respectively — two separate instances. UI packages
+installed inside `ui/node_modules` (e.g. `lucide-react`) import React from
+`ui/node_modules/react`, while `react-dom` (at the root level, used by
+`@testing-library/react`) holds the dispatcher on `node_modules/react`.
+
+Declaring `ui` as a workspace causes npm to hoist all shared packages to the
+root `node_modules`. After `npm install`, `ui/node_modules/react` no longer
+exists; `lucide-react` resolves `react` from `node_modules/react` — the same
+instance as the test environment. Exact version pinning prevents npm from
+ever picking a mismatched version for either workspace.
+
+**Implication**: `npm install` from the project root now also installs `ui`
+workspace dependencies. `npm --prefix ./ui install` still works for
+IDE/tooling compatibility. The `build:ui` and `start:ui` scripts are
+unaffected.
+
+---
+
+## ISSUE-24: `readD1Migrations` + `applyD1Migrations` instead of `readFileSync`
+
+**Decision**: The worker test setup uses `readD1Migrations` (from
+`@cloudflare/vitest-pool-workers`) with `provide`/`inject` and
+`applyD1Migrations` (from `cloudflare:test`), rather than the simpler
+`readFileSync("migrations/0001_init.sql")` pattern shown in the issue spec.
+
+**Reason**: Inside miniflare's virtual Workers filesystem, `node:fs`'s
+`readFileSync` with any path — relative or absolute — is intercepted by
+miniflare's sandboxed FS layer and fails with `ENOENT` because the host
+filesystem files are not present in the bundle. `readD1Migrations` runs in
+the Node.js context (vitest config time), before miniflare starts, so it has
+full access to the host filesystem. The result is injected via
+`test.provide.migrations` and consumed inside the Workers runtime via
+`inject("migrations")` + `applyD1Migrations(env.DB, migrations)`.
+
+---
+
+## ISSUE-24: Expired-token test removed — tests library, not application code
+
+**Decision**: The acceptance criteria listed "Expired tokens are rejected
+(302)" as a worker test case. This test was not implemented.
+
+**Reason**: Token expiry validation is entirely inside `cloudflareAccess`
+(a third-party library). Testing it would require triggering a JWKS fetch to
+the fake `test.cloudflareaccess.com` domain, which produces an unhandled
+Promise rejection as a side effect (miniflare returns a response the JOSE
+library cannot parse). Our tests should verify our code — the `authPolicies`
+array and the API routes — not the library's internal JWT verification logic.
+The actual rejection status is also 401 (not 302, as stated in the issue),
+because an expired token presented via the `Cf-Access-Jwt-Assertion` header
+reaches `cloudflareAccess` directly; only a missing cookie causes a 302
+redirect through `developerAuthentication`.
+
+---
+
 ## ISSUE-01/02: check:markdown scope narrowed to docs/**/*.md
 
 **Decision**: The `check:markdown` script was changed from `'**/*.md' '#node_modules'` to `'docs/**/*.md' '#node_modules'` (by the operator, during ISSUE-02 execution).

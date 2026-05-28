@@ -131,7 +131,7 @@ const REGISTRY = "registry.cloudflare.com";
 const WORKER_NAME = "video-pipeline-worker";
 ```
 
-**Step 1 — List container applications**
+#### Step 1 — List container applications
 
 ```javascript
 const res = await fetch(`${API_BASE}/applications`, {
@@ -143,7 +143,7 @@ const pipelineApps = apps.filter((a) =>
 );
 ```
 
-**Step 2 — Obtain temporary registry credentials**
+#### Step 2 — Obtain temporary registry credentials
 
 ```javascript
 const credRes = await fetch(`${API_BASE}/registries/${REGISTRY}/credentials`, {
@@ -158,7 +158,7 @@ const { password } = (await credRes.json()).result;
 const basicAuth = Buffer.from(`v1:${password}`).toString("base64");
 ```
 
-**Step 3 — List image tags from the OCI registry**
+#### Step 3 — List image tags from the OCI registry
 
 ```javascript
 const catalogRes = await fetch(
@@ -170,16 +170,16 @@ const { repositories } = await catalogRes.json();
 const pipelineRepos = repositories.filter((r) => r.name.includes(WORKER_NAME));
 ```
 
-**Step 4 — Prompt**
+#### Step 4 — Prompt
 
 Print the count of containers and image tags. Prompt `Delete all? (y/N)`.
 
-**Step 5 — Delete image tags via OCI registry**
+#### Step 5 — Delete image tags via OCI registry
 
 For each repo/tag pair, send `DELETE` with the `Accept` header for OCI
 manifests.
 
-**Step 6 — Delete container applications via REST API**
+#### Step 6 — Delete container applications via REST API
 
 ```javascript
 await fetch(`${API_BASE}/applications/${app.id}`, {

@@ -657,22 +657,19 @@ No manual `wrangler secret put` step is needed — API tokens for R2 and Stream 
 
 ### Vitest Configuration
 
-Tests use `@cloudflare/vitest-pool-workers` to run inside the Workers runtime with access to real bindings (D1, R2, Workflows) in local simulation:
+Tests use a multi-project `vitest.config.ts` with four named projects
+(`worker`, `ui`, `container`, `integration`). The `worker` project uses
+`cloudflareTest()` from `@cloudflare/vitest-pool-workers` (the new Vite
+plugin API for vitest 4.x), pointing at `wrangler.test.jsonc` — a
+committed test-only config with placeholder credentials so tests are
+self-contained without a real provisioned environment.
 
-```typescript
-// vitest.config.ts
-import { defineWorkersConfig } from "@cloudflare/vitest-pool-workers/config";
+Coverage uses Istanbul (`@vitest/coverage-istanbul`) rather than V8 because
+workerd does not expose the V8 profiler API.
 
-export default defineWorkersConfig({
-  test: {
-    poolOptions: {
-      workers: {
-        wrangler: { configPath: "./wrangler.jsonc" },
-      },
-    },
-  },
-});
-```
+The `pretest` lifecycle hook runs `wrangler types --config wrangler.test.jsonc
+--strict-vars=false` to generate `worker-configuration.d.ts` from the test
+config before tests compile, making `npm test` self-contained on a fresh clone.
 
 ### Authenticated Test Requests
 

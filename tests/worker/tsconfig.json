@@ -1,0 +1,21 @@
+{
+  "extends": "../../src/tsconfig.json",
+  "compilerOptions": {
+    // composite: false — test files are not part of a project-references build;
+    // they are compiled on-the-fly by Vitest's Vite transform pipeline.
+    "composite": false,
+    // Add the @cloudflare/vitest-pool-workers ambient module types so TypeScript
+    // recognises `import { ... } from "cloudflare:test"` and
+    // `import { ... } from "cloudflare:workers"`.
+    "types": ["@cloudflare/vitest-pool-workers/types", "node"]
+  },
+  "include": [
+    // Test files in this directory
+    "./**/*.ts",
+    // Source files under test (so imports like "../../src/index" resolve)
+    "../../src/**/*.ts",
+    // Generated Env interface — produced by pretest lifecycle hook:
+    //   wrangler types --config wrangler.test.jsonc --strict-vars=false
+    "../../worker-configuration.d.ts"
+  ]
+}

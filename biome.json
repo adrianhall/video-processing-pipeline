@@ -32,7 +32,8 @@
       "!.wrangler",
       "!**/container/",
       "!worker-configuration.d.ts",
-      "!ui/dist"
+      "!ui/dist",
+      "!coverage"
     ]
   }
 }

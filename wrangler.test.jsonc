@@ -1,0 +1,89 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "video-pipeline-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-05-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Fake placeholder values — no real Cloudflare infrastructure is needed to
+  // run unit tests.  Miniflare (the local Workers runtime used by Vitest)
+  // accepts any syntactically valid values for these fields.
+  //
+  // R2 credentials: `generatePresignedUrl` uses HMAC-SHA256 locally and never
+  // contacts R2, so any non-empty valid-format strings produce a signed URL.
+  // CLOUDFLARE_TEAM_DOMAIN: `cloudflareAccess` uses HMAC (not JWKS fetch) for
+  // `signDevJwt` tokens, so any string is acceptable in tests.
+  "vars": {
+    "CLOUDFLARE_TEAM_DOMAIN": "test.cloudflareaccess.com",
+    "CF_ACCOUNT_ID": "00000000000000000000000000000000",
+    "R2_BUCKET_NAME": "video-pipeline-bucket",
+    // R2_ACCESS_KEY_ID must be 32 hex chars (UUID without dashes)
+    "R2_ACCESS_KEY_ID": "00000000000000000000000000000001",
+    // R2_SECRET_ACCESS_KEY must be a 64-char lowercase hex string (SHA-256 digest)
+    "R2_SECRET_ACCESS_KEY": "0000000000000000000000000000000000000000000000000000000000000001"
+  },
+
+  // Assets binding required by the catch-all route in src/index.ts.
+  // In unit tests, no asset request ever reaches the catch-all, but Wrangler
+  // still needs the binding declaration to generate the correct Env interface.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+
+  // D1 binding — miniflare creates an in-memory SQLite database for each
+  // named binding; the database_id is not validated in local mode.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "video-pipeline-db",
+      "database_id": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+
+  // R2 binding — miniflare creates an in-memory R2 store in local mode.
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "video-pipeline-bucket"
+    }
+  ],
+
+  // Workflow binding — miniflare registers VideoProcessingWorkflow as a stub.
+  "workflows": [
+    {
+      "binding": "VIDEO_WORKFLOW",
+      "name": "video-processing-workflow",
+      "class_name": "VideoProcessingWorkflow"
+    }
+  ],
+
+  // Container configuration — Docker is not started in unit tests; miniflare
+  // registers FFmpegContainer as a stub Durable Object.
+  "containers": [
+    {
+      "class_name": "FFmpegContainer",
+      "image": "./container/Dockerfile"
+    }
+  ],
+
+  // Durable Object binding required for env.FFMPEG_CONTAINER to be in scope.
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "FFMPEG_CONTAINER",
+        "class_name": "FFmpegContainer"
+      }
+    ]
+  },
+
+  // DO migration — registers FFmpegContainer as a SQLite-backed DO class.
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["FFmpegContainer"]
+    }
+  ]
+}
