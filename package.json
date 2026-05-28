@@ -35,6 +35,7 @@
     "postprovision": "run-s generate:wrangler generate:cors",
     "prestart": "run-s generate:types build db:migrate:local",
     "start": "wrangler dev",
+    "preteardown": "node scripts/empty-bucket.mjs",
     "teardown": "terraform -chdir=infra destroy -auto-approve",
     "postteardown": "shx rm -f wrangler.jsonc worker-configuration.d.ts",
     "pretest": "run-s generate:types:test",
