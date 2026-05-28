@@ -694,6 +694,56 @@ is unaffected.
 
 ---
 
+## ISSUE-27: OCI manifest deletion uses two-step HEAD + DELETE by digest
+
+**Decision**: `scripts/cleanup-containers.mjs` deletes each image tag with a
+two-step sequence:
+
+1. `HEAD /v2/{repo}/manifests/{tag}` — resolves the `Docker-Content-Digest` header.
+2. `DELETE /v2/{repo}/manifests/{digest}` — deletes the manifest by its immutable
+   content-addressed digest.
+
+If the `HEAD` fails (non-2xx or network error), the script falls back to `DELETE` by
+tag (the same URL as the `HEAD` request).
+
+**Reason**: The issue's "Step 5" description says to send a `DELETE` with the OCI
+`Accept` header, but the "Other Notes" section explicitly states:
+> Image tag deletion requires first resolving the manifest digest via a `HEAD` request
+> with the appropriate `Accept` header, then issuing a `DELETE` against the same URL.
+> Wrangler's `containers images delete` command follows this same two-step process.
+
+Deleting by tag (name) is not guaranteed by the OCI Distribution spec — registries
+are permitted to reject `DELETE /manifests/{tag}` and require deletion by digest.
+Deleting by the content digest (`Docker-Content-Digest` from the `HEAD` response)
+is the spec-compliant approach and matches how `wrangler containers images delete`
+works internally.
+
+**Fallback**: The script still attempts a `DELETE` by tag if the `HEAD` fails, since
+some registry implementations do accept tag-based deletion and this avoids a hard stop
+when the HEAD unexpectedly returns an error.
+
+---
+
+## ISSUE-27: `run-s preteardown:*` runs scripts in alphabetical order — bucket before containers
+
+**Decision**: The `preteardown` script was changed from a single
+`node scripts/empty-bucket.mjs` command (ISSUE-26) to
+`run-s preteardown:*` with two named sub-scripts:
+
+```json
+"preteardown:bucket":     "node scripts/empty-bucket.mjs",
+"preteardown:containers": "node --env-file=.env scripts/cleanup-containers.mjs"
+```
+
+**Reason**: `run-s` (from `npm-run-all2`) executes scripts matching a glob pattern in
+**alphabetical order**. `bucket` sorts before `containers`, so the R2 bucket is
+emptied first, then the container application and registry images are cleaned up.
+This order is preferable: if the bucket cleanup is declined (exit 1), teardown halts
+before even prompting for container cleanup. Conversely, if the registry is unavailable
+but the bucket is full, the bucket prompt still runs correctly.
+
+---
+
 ## ISSUE-01/02: check:markdown scope narrowed to docs/**/*.md
 
 **Decision**: The `check:markdown` script was changed from `'**/*.md' '#node_modules'` to `'docs/**/*.md' '#node_modules'` (by the operator, during ISSUE-02 execution).
