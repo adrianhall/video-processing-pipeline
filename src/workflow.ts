@@ -192,9 +192,6 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
         { retries: { limit: 3, delay: "10 seconds" } },
         async () => {
           this.logStep("transcode", videoId, "started");
-
-          // Mark the video as actively transcoding so the UI reflects the current
-          // pipeline stage immediately, even before the container is warm.
           await this.updateStatus("transcoding", videoId);
 
           // Compute the output key once — used for both the container call and the
@@ -426,7 +423,6 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
         // transition — the frontend will show the video player once it sees
         // status = "complete".
         await this.updateStatus("complete", videoId);
-
         this.logStep("finalize", videoId, "completed");
       });
     } catch (err) {
