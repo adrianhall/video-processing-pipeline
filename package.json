@@ -19,7 +19,7 @@
     "check:infra": "terraform -chdir=infra validate",
     "check:markdown": "markdownlint-cli2 'docs/*.md' 'docs/issues/*.md' '#node_modules'",
     "check:types": "tsc -b --noEmit",
-    "db:migrate:remote": "wrangler d1 migrations apply video-pipeline-db",
+    "db:migrate:remote": "wrangler d1 migrations apply video-pipeline-db --remote",
     "db:migrate:local": "wrangler d1 migrations apply video-pipeline-db --local",
     "predeploy": "run-s generate:types build db:migrate:remote",
     "deploy": "wrangler deploy",

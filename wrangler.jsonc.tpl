@@ -6,6 +6,9 @@
   "compatibility_flags": ["nodejs_compat"],
   "account_id": "{{account_id}}",
 
+  // Disable preview URLs deliberately.
+  "preview_urls": false,
+
   // Observability: capture all requests during development (head_sampling_rate: 1 = 100%).
   // Reduce to 0.1 (10%) or lower for a production deployment to control log volume.
   "observability": {

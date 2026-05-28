@@ -665,6 +665,35 @@ in `index.ts`). The simplest path is to move `AppEnv` to a shared `types.ts` imp
 
 ---
 
+## Hotfix: `--remote` flag required for `db:migrate:remote` in wrangler v4
+
+**Decision**: Added `--remote` to the `db:migrate:remote` npm script:
+`wrangler d1 migrations apply video-pipeline-db --remote`.
+
+**Reason**: In wrangler v4, `wrangler d1 migrations apply` defaults to **local** simulation
+when no flag is supplied, matching the v4 philosophy of "local by default". The script was
+originally written without an explicit flag, relying on the older behaviour where remote was
+the default. The `--local` variant already carried an explicit flag; the remote variant did
+not — it was silently migrating `.wrangler/state/v3/d1/` instead of the real Cloudflare D1.
+
+**Discovery**: Running `npm run provision && npm run deploy` printed:
+`Resource location: local — Use --remote if you want to access the remote instance.`
+from the `predeploy → db:migrate:remote` step. The remote D1 database had no schema applied
+and all API calls that touched the `videos` table returned D1 errors at runtime.
+
+**Immediate remediation**: Any environment where `npm run deploy` was run without the fix
+must have the migration applied manually:
+
+```bash
+wrangler d1 migrations apply video-pipeline-db --remote
+```
+
+**Implication**: `npm run deploy` (via `predeploy`) and `npm run db:migrate:remote` now
+reliably target the remote Cloudflare D1 database. The `prestart` / `db:migrate:local` path
+is unaffected.
+
+---
+
 ## ISSUE-01/02: check:markdown scope narrowed to docs/**/*.md
 
 **Decision**: The `check:markdown` script was changed from `'**/*.md' '#node_modules'` to `'docs/**/*.md' '#node_modules'` (by the operator, during ISSUE-02 execution).
