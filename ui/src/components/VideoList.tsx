@@ -11,6 +11,23 @@ import { Skeleton } from "@/components/ui/skeleton";
 import VideoCard from "@/components/VideoCard";
 
 // ---------------------------------------------------------------------------
+// Polling interval constants
+// ---------------------------------------------------------------------------
+
+/**
+ * Polling interval in milliseconds while any video has an in-progress status
+ * (`uploading`, `processing`, `transcoding`, `extracting_audio`, `grayscaling`).
+ * Provides near-real-time feedback without excessive API load.
+ */
+const POLL_INTERVAL_ACTIVE = 3_000;
+
+/**
+ * Polling interval in milliseconds when all videos are `complete` or `error`.
+ * Reduces unnecessary API calls during idle periods.
+ */
+const POLL_INTERVAL_IDLE = 30_000;
+
+// ---------------------------------------------------------------------------
 // Skeleton placeholder (matches VideoCard structure)
 // ---------------------------------------------------------------------------
 
@@ -80,16 +97,28 @@ interface VideoListProps {
 
 /**
  * Dashboard component that fetches and displays all uploaded videos as a
- * responsive grid of {@link VideoCard} elements.
+ * responsive grid of {@link VideoCard} elements, with automatic status polling.
  *
- * On mount the component calls `GET /api/videos` via {@link fetchVideos} and
- * populates the grid.  While the initial request is in flight, four
- * {@link VideoCardSkeleton} placeholders are rendered to prevent layout shift.
- * If the fetch fails, an inline error message is shown instead.
+ * **Polling behaviour**: On mount the component immediately calls
+ * `GET /api/videos` via {@link fetchVideos}.  After each response the next
+ * poll is scheduled with `setTimeout` (not `setInterval`) so requests never
+ * stack — each poll waits for the previous one to complete before scheduling
+ * the next.  The interval is dynamic:
  *
- * Note: this component fetches once on mount.  Automatic status polling is
- * implemented in ISSUE-23; until then, users must refresh the page to see
- * updated statuses.
+ * - **{@link POLL_INTERVAL_ACTIVE} ms (3 s)** while any video has an
+ *   in-progress status (`uploading`, `processing`, `transcoding`,
+ *   `extracting_audio`, `grayscaling`).
+ * - **{@link POLL_INTERVAL_IDLE} ms (30 s)** when all videos are `complete`
+ *   or `error`.
+ *
+ * While the initial request is in flight, four {@link VideoCardSkeleton}
+ * placeholders are rendered to prevent layout shift.  If the initial fetch
+ * fails, an inline error message is shown.  Errors on subsequent polls are
+ * silently swallowed — a toast notification is planned for a future issue.
+ *
+ * The polling timer is torn down on component unmount via the `useEffect`
+ * cleanup function.  Newly uploaded videos appear automatically on the next
+ * poll cycle (within 3 s while any video is in-progress).
  *
  * @param props - See {@link VideoListProps}.
  * @returns A responsive `grid` of `VideoCard` components or skeleton
@@ -107,26 +136,56 @@ function VideoList({ onPlay }: VideoListProps) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let active = true;
+    /**
+     * Tracks whether the first poll has completed.  Used to transition the
+     * initial loading state and to decide whether errors should be surfaced
+     * (initial load errors are shown; subsequent errors are silent).
+     */
+    let isFirstPoll = true;
 
-    fetchVideos()
-      .then((data) => {
-        if (!cancelled) {
-          setVideos(data);
-          setLoading(false);
+    async function poll() {
+      // Holds the fetched videos for this cycle; used to compute the next
+      // poll interval even when the fetch fails (empty array → idle interval).
+      let current: VideoResource[] = [];
+
+      try {
+        current = await fetchVideos();
+
+        if (active) {
+          setVideos(current);
+          if (isFirstPoll) {
+            setLoading(false);
+            isFirstPoll = false;
+          }
         }
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
+      } catch (err: unknown) {
+        if (active && isFirstPoll) {
           setError(
             err instanceof Error ? err.message : "Failed to load videos",
           );
           setLoading(false);
+          isFirstPoll = false;
         }
-      });
+        // Silently continue polling on subsequent errors — show toast in future
+      }
+
+      if (!active) return;
+
+      // Switch to a fast interval while any video is still being processed.
+      const hasInProgress = current.some(
+        (v) => !["complete", "error"].includes(v.status),
+      );
+      const delay = hasInProgress ? POLL_INTERVAL_ACTIVE : POLL_INTERVAL_IDLE;
+      timeoutId = setTimeout(poll, delay);
+    }
+
+    void poll(); // Fire initial fetch immediately
 
     return () => {
-      cancelled = true;
+      active = false;
+      clearTimeout(timeoutId);
     };
   }, []);
 
