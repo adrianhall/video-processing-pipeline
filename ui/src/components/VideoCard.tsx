@@ -103,13 +103,14 @@ interface VideoCardProps {
   video: VideoResource;
   /**
    * Callback invoked when the user clicks the "Play" button.
-   * Called with the video's UUID so the parent can open the player.
+   * Called with the full {@link VideoResource} so the parent can open the
+   * player with the correct `play_url` without an additional lookup.
    * Only invokable when `video.status === "complete"` and
    * `video.play_url` is non-null.
    *
-   * @param id - The UUID of the video to play.
+   * @param video - The video record whose `play_url` should be played.
    */
-  onPlay: (id: string) => void;
+  onPlay: (video: VideoResource) => void;
 }
 
 /**
@@ -130,7 +131,7 @@ interface VideoCardProps {
  * ```tsx
  * <VideoCard
  *   video={myVideo}
- *   onPlay={(id) => setSelectedVideoId(id)}
+ *   onPlay={(video) => setSelectedVideo(video)}
  * />
  * ```
  */
@@ -164,7 +165,7 @@ function VideoCard({ video, onPlay }: VideoCardProps) {
           variant="default"
           disabled={!canPlay}
           onClick={() => {
-            if (canPlay) onPlay(video.id);
+            if (canPlay) onPlay(video);
           }}
         >
           <Play data-icon="inline-start" />

@@ -537,6 +537,38 @@ browser-based uploads return "Upload network error".
 
 ---
 
+## ISSUE-22: `onPlay` callback passes full `VideoResource`, not just the ID
+
+**Decision**: Changed the `onPlay` prop in `VideoCard` and `VideoList` from
+`(id: string) => void` to `(video: VideoResource) => void`.  `App.tsx` state
+was renamed from `selectedVideoId: string | null` to
+`selectedVideo: VideoResource | null`.
+
+**Reason**: The `VideoPlayer` component needs `play_url` from the
+`VideoResource` to set the `<video src>` attribute.  Passing only the ID would
+require `App.tsx` to maintain a secondary lookup map or redundant state to
+recover the `play_url`.  Passing the full object keeps the data flow simple and
+avoids the extra indirection.  The issue code example (`selectedVideo?.play_url`)
+already implies a full `VideoResource` in state.
+
+---
+
+## ISSUE-22: `biome-ignore` for `useMediaCaption` on the `<video>` element
+
+**Decision**: Added a `biome-ignore lint/a11y/useMediaCaption` suppression
+comment on the `<video>` element inside `VideoPlayer.tsx`.
+
+**Reason**: Biome's `useMediaCaption` accessibility rule requires a `<track
+kind="captions">` element on every `<video>`.  The pipeline produces
+silent-audio grayscale video output — no caption data is generated at any
+pipeline step — so there is genuinely nothing to attach as a caption track.
+An empty `<track src="">` would satisfy the linter but provide no value to
+users and would cause a broken network request.  The suppression comment
+includes a note describing a future enhancement path (subtitle extraction from
+the original audio stream).
+
+---
+
 ## ISSUE-01/02: check:markdown scope narrowed to docs/**/*.md
 
 **Decision**: The `check:markdown` script was changed from `'**/*.md' '#node_modules'` to `'docs/**/*.md' '#node_modules'` (by the operator, during ISSUE-02 execution).

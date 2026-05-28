@@ -1,15 +1,36 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 
+import type { VideoResource } from "@/api";
 import UploadZone from "@/components/UploadZone";
 import VideoList from "@/components/VideoList";
+
+// ---------------------------------------------------------------------------
+// Lazy-loaded VideoPlayer
+// ---------------------------------------------------------------------------
+
+/**
+ * Lazy-loaded `VideoPlayer` component.  The Dialog + `<video>` element chunk
+ * is only downloaded when the user first clicks "Play", keeping the initial
+ * JS bundle smaller for users who never play a video.
+ *
+ * Uses a default export from `VideoPlayer.tsx` so the standard
+ * `React.lazy(() => import(...))` pattern works without the
+ * `.then(m => ({ default: m.VideoPlayer }))` workaround.
+ */
+const VideoPlayer = lazy(() => import("./components/VideoPlayer"));
+
+// ---------------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------------
 
 /**
  * Root application component.
  *
  * Renders the top-level shell for the Video Processing Pipeline SPA,
  * including the page heading, the drag-and-drop upload zone, and the video
- * dashboard.  Holds the `selectedVideoId` state that will be passed to the
- * `VideoPlayer` component (added in ISSUE-22).
+ * dashboard.  Holds the `selectedVideo` state: when a video is selected for
+ * playback (by clicking "Play" on a {@link VideoCard}), the `VideoPlayer`
+ * dialog is rendered via a `Suspense` boundary.
  *
  * Layout: a full-width container with a vertical flex stack and consistent
  * `gap-8` spacing between major sections.
@@ -28,20 +49,27 @@ import VideoList from "@/components/VideoList";
  */
 function App() {
   /**
-   * UUID of the video currently selected for playback, or `null` when no
-   * video is selected.  Set via the `onPlay` callback on `VideoList` /
-   * `VideoCard`.  Will be consumed by `VideoPlayer` in ISSUE-22.
+   * The full `VideoResource` currently selected for playback, or `null` when
+   * no video is playing.  Set via the `onPlay` callback on `VideoList` /
+   * `VideoCard` when the user clicks "Play" on a completed video.  Cleared
+   * by `VideoPlayer`'s `onClose` callback when the dialog is dismissed.
    */
-  const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
+  const [selectedVideo, setSelectedVideo] = useState<VideoResource | null>(
+    null,
+  );
 
   return (
     <main className="container mx-auto flex flex-col gap-8 p-8">
       <h1 className="text-3xl font-bold">Video Processing Pipeline</h1>
       <UploadZone />
-      <VideoList onPlay={setSelectedVideoId} />
-      {/* selectedVideoId is consumed by VideoPlayer (ISSUE-22) */}
-      {selectedVideoId !== null && (
-        <p className="sr-only">Selected video: {selectedVideoId}</p>
+      <VideoList onPlay={setSelectedVideo} />
+      {selectedVideo?.play_url && (
+        <Suspense fallback={null}>
+          <VideoPlayer
+            playUrl={selectedVideo.play_url}
+            onClose={() => setSelectedVideo(null)}
+          />
+        </Suspense>
       )}
     </main>
   );

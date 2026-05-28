@@ -138,10 +138,10 @@ The full backend pipeline and initial frontend upload flow are implemented.
 - `ui/src/components/UploadZone.tsx` — drag-and-drop upload zone with XHR progress tracking (ISSUE-20)
 - `ui/src/components/VideoCard.tsx` — individual video status card with status badge mapping (ISSUE-21)
 - `ui/src/components/VideoList.tsx` — video dashboard grid with skeleton loading (ISSUE-21)
+- `ui/src/components/VideoPlayer.tsx` — HTML5 `<video>` in a shadcn Dialog; lazy-loaded via `React.lazy()`; `App.tsx` state changed from `selectedVideoId: string` to `selectedVideo: VideoResource | null` (ISSUE-22)
 
-### Not Yet Implemented (ISSUE-22+)
+### Not Yet Implemented (ISSUE-23+)
 
-- `ui/src/components/VideoPlayer.tsx` — HTML5 `<video>` player wrapper (ISSUE-22)
 - Vitest config and test suite
 
 ---

@@ -408,7 +408,7 @@ type VideoStatus =
 | `UploadZone` | Drag-and-drop area, client-side queue, progress bars |
 | `VideoList` | Fetches and renders list of `VideoCard` components |
 | `VideoCard` | Shows video name, status badge, thumbnail, click-to-play |
-| `VideoPlayer` | Wraps `@cloudflare/stream-react` `<Stream>` component |
+| `VideoPlayer` | Native HTML5 `<video>` inside a shadcn `Dialog`; lazy-loaded with `React.lazy()` |
 
 ### Upload Flow (Browser)
 

@@ -66,10 +66,12 @@ interface VideoListProps {
   /**
    * Callback invoked when the user clicks the "Play" button on a card.
    * The parent component uses this to open the video player (ISSUE-22).
+   * The full {@link VideoResource} is passed so the parent can access
+   * `play_url` directly without an additional lookup.
    *
-   * @param id - The UUID of the video to play.
+   * @param video - The video record to play.
    */
-  onPlay: (id: string) => void;
+  onPlay: (video: VideoResource) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -96,7 +98,7 @@ interface VideoListProps {
  * @example
  * ```tsx
  * // In App.tsx
- * <VideoList onPlay={(id) => setSelectedVideoId(id)} />
+ * <VideoList onPlay={(video) => setSelectedVideo(video)} />
  * ```
  */
 function VideoList({ onPlay }: VideoListProps) {
