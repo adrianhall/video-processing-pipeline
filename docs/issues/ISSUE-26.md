@@ -31,6 +31,8 @@ The script can then prompt "X objects exist in this bucket.  Are you sure?" and 
 
 Do not delete the bucket itself as this is done by Terraform.
 
+This script will be wired into the `preteardown` process.
+
 ## Manual Tests
 
 - [ ] Put some objects in an R2 bucket and then run the script with appropriate arguments to determine functionality is correct.
