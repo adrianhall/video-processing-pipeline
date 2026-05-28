@@ -207,16 +207,22 @@ def _upload(url: str, src: str, content_type: str) -> None:
     app.logger.info("[upload] PUT %s  size: %d bytes  Content-Type: %s",
                     _url_display(url), file_size, content_type)
     t0 = time.monotonic()
+    # Stream the file directly instead of reading it all into memory.
+    # urllib reads from the file object in 8 KiB chunks, keeping peak
+    # memory usage proportional to the chunk size rather than file size.
+    # Content-Length must be set explicitly when data is a file object.
     with open(src, "rb") as f:
-        data = f.read()
-    req = urllib.request.Request(
-        url,
-        data=data,
-        method="PUT",
-        headers={"Content-Type": content_type},
-    )
-    with urllib.request.urlopen(req, context=_UNVERIFIED_SSL_CTX) as resp:
-        upload_status = resp.status
+        req = urllib.request.Request(
+            url,
+            data=f,
+            method="PUT",
+            headers={
+                "Content-Type": content_type,
+                "Content-Length": str(file_size),
+            },
+        )
+        with urllib.request.urlopen(req, context=_UNVERIFIED_SSL_CTX) as resp:
+            upload_status = resp.status
     elapsed = time.monotonic() - t0
     app.logger.info("[upload] complete — HTTP %d in %.2fs (%.1f KB/s)",
                     upload_status, elapsed, file_size / 1024 / max(elapsed, 0.001))
@@ -505,9 +511,12 @@ def transcode() -> Response:
         output_ext="output.mp4",
         build_cmd=lambda inp, out: [
             "ffmpeg",
+            "-threads", "1",
             "-i", inp,
+            "-threads", "1",
             "-c:v", "libx264",
             "-c:a", "aac",
+            "-max_muxing_queue_size", "64",
             "-y", out,
         ],
         output_content_type="video/mp4",
@@ -551,9 +560,12 @@ def extract_audio() -> Response:
         output_ext="output.mp3",
         build_cmd=lambda inp, out: [
             "ffmpeg",
+            "-threads", "1",
             "-i", inp,
+            "-threads", "1",
             "-vn",
             "-c:a", "libmp3lame",
+            "-max_muxing_queue_size", "64",
             "-y", out,
         ],
         output_content_type="audio/mpeg",
@@ -603,9 +615,12 @@ def grayscale() -> Response:
         output_ext="output.mp4",
         build_cmd=lambda inp, out: [
             "ffmpeg",
+            "-threads", "1",
             "-i", inp,
+            "-threads", "1",
             "-vf", "format=gray",
             "-c:a", "copy",
+            "-max_muxing_queue_size", "64",
             "-y", out,
         ],
         output_content_type="video/mp4",

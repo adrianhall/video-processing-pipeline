@@ -76,7 +76,8 @@
   "containers": [
     {
       "class_name": "FFmpegContainer",
-      "image": "./container/Dockerfile"
+      "image": "./container/Dockerfile",
+      "instance_type": "standard-1"
     }
   ],
 

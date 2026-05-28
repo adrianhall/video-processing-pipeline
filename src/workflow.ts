@@ -607,11 +607,23 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
       //  2. Checkpointing — if this step itself has already succeeded in a
       //     previous attempt we skip it rather than writing a duplicate error row.
       // -----------------------------------------------------------------------
+      const errorMessage = String(err);
+
+      console.error(
+        JSON.stringify({
+          source: "VideoProcessingWorkflow",
+          event: "workflow_failed",
+          videoId,
+          error: errorMessage,
+          timestamp: new Date().toISOString(),
+        }),
+      );
+
       await step.do("mark-error", async () => {
         await this.env.DB.prepare(
           "UPDATE videos SET status = ?, error_message = ?, updated_at = ? WHERE id = ?",
         )
-          .bind("error", String(err), new Date().toISOString(), videoId)
+          .bind("error", errorMessage, new Date().toISOString(), videoId)
           .run();
       });
 

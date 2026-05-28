@@ -237,8 +237,33 @@ export class FFmpegContainer extends Container<Env> {
       `[FFmpegContainer] forwarding ${request.method} ${url.pathname} to container`,
     );
     const resp = await this.containerFetch(request);
+    const contentType = resp.headers.get("content-type") ?? "";
+
+    if (!resp.ok) {
+      // Read and log the full error body so the Flask error detail (including
+      // ffmpeg stderr) appears in Workers Observability.  Without this the
+      // only visible signal is "HTTP 500" with no explanation.
+      const errorBody = await resp.text();
+      console.error(
+        JSON.stringify({
+          source: "FFmpegContainer",
+          event: "container_error",
+          method: request.method,
+          path: url.pathname,
+          status: resp.status,
+          contentType,
+          body: errorBody.slice(0, 2000),
+        }),
+      );
+      // Return a new Response since the original body has been consumed.
+      return new Response(errorBody, {
+        status: resp.status,
+        headers: resp.headers,
+      });
+    }
+
     console.log(
-      `[FFmpegContainer] ← HTTP ${resp.status}  Content-Type: ${resp.headers.get("content-type") ?? ""}`,
+      `[FFmpegContainer] ← HTTP ${resp.status}  Content-Type: ${contentType}`,
     );
     return resp;
   }
