@@ -156,29 +156,9 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
       // This step is intentionally lightweight — just a single D1 UPDATE.
       // If it fails (e.g. a transient D1 error) Workflows retries it automatically.
       await step.do("register", async () => {
-        console.log(
-          JSON.stringify({
-            step: "register",
-            videoId,
-            status: "started",
-            timestamp: new Date().toISOString(),
-          }),
-        );
-
-        await this.env.DB.prepare(
-          "UPDATE videos SET status = ?, updated_at = ? WHERE id = ?",
-        )
-          .bind("processing", new Date().toISOString(), videoId)
-          .run();
-
-        console.log(
-          JSON.stringify({
-            step: "register",
-            videoId,
-            status: "completed",
-            timestamp: new Date().toISOString(),
-          }),
-        );
+        this.logStep("register", videoId, "started");
+        await this.updateStatus("processing", videoId);
+        this.logStep("register", videoId, "completed");
       });
 
       // =======================================================================
@@ -188,7 +168,7 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
       // and AAC audio so that every downstream step works with a consistent format.
       //
       // Fast-path optimisation: if the incoming file is already MP4, we copy it
-      // directly within R2 using the BUCKET binding — no container startup, no
+      // directly within R2 using presigned URLs — no container startup, no
       // network round-trip, no re-encoding.  This is a common case (many screen
       // recordings and phone uploads are already MP4) and avoids unnecessary cost.
       //
@@ -211,25 +191,14 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
         "transcode",
         { retries: { limit: 3, delay: "10 seconds" } },
         async () => {
-          console.log(
-            JSON.stringify({
-              step: "transcode",
-              videoId,
-              status: "started",
-              timestamp: new Date().toISOString(),
-            }),
-          );
+          this.logStep("transcode", videoId, "started");
 
           // Mark the video as actively transcoding so the UI reflects the current
           // pipeline stage immediately, even before the container is warm.
-          await this.env.DB.prepare(
-            "UPDATE videos SET status = ?, updated_at = ? WHERE id = ?",
-          )
-            .bind("transcoding", new Date().toISOString(), videoId)
-            .run();
+          await this.updateStatus("transcoding", videoId);
 
-          // Compute the output key once — used for both the presigned PUT URL
-          // and the final D1 update.
+          // Compute the output key once — used for both the container call and the
+          // final D1 update.
           const outputKey = `video/${videoId}.mp4`;
 
           if (originalFormat === "mp4") {
@@ -288,38 +257,16 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
             // -----------------------------------------------------------------
             // Slow path: non-MP4 format — transcode via the ffmpeg container.
             //
-            // Each video has its own named container instance so multiple videos
-            // can transcode in parallel without serialisation.  getByName() is
-            // idempotent — calling it twice for the same name returns the same
-            // underlying instance.
+            // Each video gets its own named container instance so multiple videos
+            // can transcode in parallel without serialisation.
             // -----------------------------------------------------------------
-            const inputUrl = await generatePresignedUrl(
-              this.env,
-              this.env.R2_BUCKET_NAME,
+            await this.callContainer(
+              videoId,
+              "transcode",
               r2IncomingKey,
-              "GET",
-            );
-            const outputUrl = await generatePresignedUrl(
-              this.env,
-              this.env.R2_BUCKET_NAME,
               outputKey,
-              "PUT",
+              "Transcode",
             );
-
-            const container = this.env.FFMPEG_CONTAINER.getByName(videoId);
-            const resp = await container.fetch("http://container/transcode", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                input_url: inputUrl,
-                output_url: outputUrl,
-              }),
-            });
-
-            const result = await resp.json<ContainerResult>();
-            if (!result.ok) {
-              throw new Error(`Transcode failed: ${result.error}`);
-            }
           }
 
           // Record the output key so downstream steps (extract-audio, grayscale)
@@ -330,14 +277,7 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
             .bind(outputKey, new Date().toISOString(), videoId)
             .run();
 
-          console.log(
-            JSON.stringify({
-              step: "transcode",
-              videoId,
-              status: "completed",
-              timestamp: new Date().toISOString(),
-            }),
-          );
+          this.logStep("transcode", videoId, "completed");
         },
       );
 
@@ -349,12 +289,10 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
       //
       // How it works:
       //  1. Flip D1 status to "extracting_audio" so the UI reflects the active stage.
-      //  2. Generate a presigned GET URL for "video/{videoId}.mp4" (Step 2 output).
-      //  3. Generate a presigned PUT URL for "audio/{videoId}.mp3".
-      //  4. Call POST /extract-audio on the per-video FFmpegContainer instance.
+      //  2. Call POST /extract-audio on the per-video FFmpegContainer instance.
       //     The container runs `ffmpeg -i input -vn -c:a libmp3lame output.mp3` —
       //     "-vn" drops the video stream, leaving only the audio track as MP3.
-      //  5. Persist the output key as r2_audio_key in D1.
+      //  3. Persist the output key as r2_audio_key in D1.
       //
       // The container instance was already warm from Step 2 (within the 60-second
       // sleepAfter window), so this step has no cold-start penalty.
@@ -366,58 +304,22 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
         "extract-audio",
         { retries: { limit: 3, delay: "10 seconds" } },
         async () => {
-          console.log(
-            JSON.stringify({
-              step: "extract-audio",
-              videoId,
-              status: "started",
-              timestamp: new Date().toISOString(),
-            }),
-          );
+          this.logStep("extract-audio", videoId, "started");
 
           // Mark the video as actively extracting audio so the UI reflects the
           // current pipeline stage immediately.
-          await this.env.DB.prepare(
-            "UPDATE videos SET status = ?, updated_at = ? WHERE id = ?",
-          )
-            .bind("extracting_audio", new Date().toISOString(), videoId)
-            .run();
+          await this.updateStatus("extracting_audio", videoId);
 
-          // Presigned GET for the transcoded MP4 produced by Step 2.
-          const inputUrl = await generatePresignedUrl(
-            this.env,
-            this.env.R2_BUCKET_NAME,
-            `video/${videoId}.mp4`,
-            "GET",
-          );
-
-          // Compute the output key once — used for both the presigned PUT URL
-          // and the final D1 update.
+          // Compute the output key once — used for both the container call and
+          // the final D1 update.
           const outputKey = `audio/${videoId}.mp3`;
-          const outputUrl = await generatePresignedUrl(
-            this.env,
-            this.env.R2_BUCKET_NAME,
+          await this.callContainer(
+            videoId,
+            "extract-audio",
+            `video/${videoId}.mp4`,
             outputKey,
-            "PUT",
+            "Audio extraction",
           );
-
-          // Re-use the named container instance from Step 2.  getByName() is
-          // idempotent — the same Durable Object stub is returned for the same
-          // name, and the container is still warm from the transcode step.
-          const container = this.env.FFMPEG_CONTAINER.getByName(videoId);
-          const resp = await container.fetch("http://container/extract-audio", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              input_url: inputUrl,
-              output_url: outputUrl,
-            }),
-          });
-
-          const result = await resp.json<ContainerResult>();
-          if (!result.ok) {
-            throw new Error(`Audio extraction failed: ${result.error}`);
-          }
 
           // Record the output key so the UI (VideoCard) and any future consumers
           // can reference the extracted audio file in R2.
@@ -427,14 +329,7 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
             .bind(outputKey, new Date().toISOString(), videoId)
             .run();
 
-          console.log(
-            JSON.stringify({
-              step: "extract-audio",
-              videoId,
-              status: "completed",
-              timestamp: new Date().toISOString(),
-            }),
-          );
+          this.logStep("extract-audio", videoId, "completed");
         },
       );
 
@@ -443,21 +338,19 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
       // =======================================================================
       // Purpose: Apply the `format=gray` ffmpeg filter to produce a black-and-white
       // version of the MP4.  The original colour MP4 is kept in R2 untouched.
-      // The grayscale version is the one uploaded to Cloudflare Stream in Step 5.
+      // The grayscale version is the terminal output artifact served for playback.
       //
       // How it works:
       //  1. Flip D1 status to "grayscaling" so the UI reflects the active stage.
-      //  2. Generate a presigned GET URL for "video/{videoId}.mp4" (Step 2 output).
-      //  3. Generate a presigned PUT URL for "bwvideo/{videoId}.mp4".
-      //  4. Call POST /grayscale on the per-video FFmpegContainer instance.
+      //  2. Call POST /grayscale on the per-video FFmpegContainer instance.
       //     The container runs `ffmpeg -i input -vf format=gray -c:a copy output.mp4` —
       //     `format=gray` desaturates every frame while `-c:a copy` passes the audio
       //     stream through without re-encoding for efficiency.
-      //  5. Persist the output key as r2_bw_key in D1.
+      //  3. Persist the output key as r2_bw_key in D1.
       //
       // After this step the container has completed all its work.  The 60-second
-      // `sleepAfter` window means it will auto-stop shortly after.  Steps 5 and 6
-      // operate on R2 objects and the Stream API — no container involvement.
+      // `sleepAfter` window means it will auto-stop shortly after.  Step 5
+      // operates on R2 and D1 only — no container involvement.
       //
       // D1 status while running: "grayscaling"
       // Input:  "video/{videoId}.mp4"   (r2_video_key written by Step 2)
@@ -466,58 +359,22 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
         "grayscale",
         { retries: { limit: 3, delay: "10 seconds" } },
         async () => {
-          console.log(
-            JSON.stringify({
-              step: "grayscale",
-              videoId,
-              status: "started",
-              timestamp: new Date().toISOString(),
-            }),
-          );
+          this.logStep("grayscale", videoId, "started");
 
           // Mark the video as actively converting to grayscale so the UI reflects
           // the current pipeline stage immediately, before the container call begins.
-          await this.env.DB.prepare(
-            "UPDATE videos SET status = ?, updated_at = ? WHERE id = ?",
-          )
-            .bind("grayscaling", new Date().toISOString(), videoId)
-            .run();
+          await this.updateStatus("grayscaling", videoId);
 
-          // Presigned GET for the transcoded MP4 produced by Step 2.
-          const inputUrl = await generatePresignedUrl(
-            this.env,
-            this.env.R2_BUCKET_NAME,
-            `video/${videoId}.mp4`,
-            "GET",
-          );
-
-          // Compute the output key once — used for both the presigned PUT URL
-          // and the final D1 update.
+          // Compute the output key once — used for both the container call and
+          // the final D1 update.
           const outputKey = `bwvideo/${videoId}.mp4`;
-          const outputUrl = await generatePresignedUrl(
-            this.env,
-            this.env.R2_BUCKET_NAME,
+          await this.callContainer(
+            videoId,
+            "grayscale",
+            `video/${videoId}.mp4`,
             outputKey,
-            "PUT",
+            "Grayscale conversion",
           );
-
-          // Re-use the named container instance from Steps 2 and 3.  getByName() is
-          // idempotent — the same Durable Object stub is returned for the same name.
-          // The container is still within the 60-second sleepAfter window from Step 3.
-          const container = this.env.FFMPEG_CONTAINER.getByName(videoId);
-          const resp = await container.fetch("http://container/grayscale", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              input_url: inputUrl,
-              output_url: outputUrl,
-            }),
-          });
-
-          const result = await resp.json<ContainerResult>();
-          if (!result.ok) {
-            throw new Error(`Grayscale conversion failed: ${result.error}`);
-          }
 
           // Record the output key so Step 5 (finalize) and the UI (VideoCard)
           // can reference the grayscale file in R2 for playback.
@@ -527,14 +384,7 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
             .bind(outputKey, new Date().toISOString(), videoId)
             .run();
 
-          console.log(
-            JSON.stringify({
-              step: "grayscale",
-              videoId,
-              status: "completed",
-              timestamp: new Date().toISOString(),
-            }),
-          );
+          this.logStep("grayscale", videoId, "completed");
         },
       );
 
@@ -564,14 +414,7 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
       // D1 status after this step: "complete"
       // Cleanup: r2IncomingKey deleted from BUCKET
       await step.do("finalize", async () => {
-        console.log(
-          JSON.stringify({
-            step: "finalize",
-            videoId,
-            status: "started",
-            timestamp: new Date().toISOString(),
-          }),
-        );
+        this.logStep("finalize", videoId, "started");
 
         // Delete the raw incoming file from R2.  It has now been transcoded,
         // audio-extracted, and converted to grayscale — keeping it would
@@ -582,20 +425,9 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
         // Mark the video as complete in D1.  This is the terminal status
         // transition — the frontend will show the video player once it sees
         // status = "complete".
-        await this.env.DB.prepare(
-          "UPDATE videos SET status = ?, updated_at = ? WHERE id = ?",
-        )
-          .bind("complete", new Date().toISOString(), videoId)
-          .run();
+        await this.updateStatus("complete", videoId);
 
-        console.log(
-          JSON.stringify({
-            step: "finalize",
-            videoId,
-            status: "completed",
-            timestamp: new Date().toISOString(),
-          }),
-        );
+        this.logStep("finalize", videoId, "completed");
       });
     } catch (err) {
       // -----------------------------------------------------------------------
@@ -606,6 +438,9 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
       //     retried, so the error message is never silently lost.
       //  2. Checkpointing — if this step itself has already succeeded in a
       //     previous attempt we skip it rather than writing a duplicate error row.
+      //
+      // Note: this error update writes BOTH status AND error_message in a single
+      // statement — a different shape from updateStatus() — so it stays inline.
       // -----------------------------------------------------------------------
       const errorMessage = String(err);
 
@@ -631,5 +466,149 @@ export class VideoProcessingWorkflow extends WorkflowEntrypoint<
       // Cloudflare dashboard — useful for debugging, alerting, and wrangler logs.
       throw err;
     }
+  }
+
+  /**
+   * Updates the `status` and `updated_at` fields for a video row in D1.
+   *
+   * Replaces the six identical `UPDATE videos SET status = ?, updated_at = ?
+   * WHERE id = ?` prepared-statement blocks that previously appeared in every
+   * step body.  The error handler's `mark-error` step writes `status`,
+   * `error_message`, AND `updated_at` in a single statement and therefore
+   * remains inline.
+   *
+   * @param status - The new status value to persist (e.g. `"processing"`,
+   *   `"transcoding"`, `"complete"`).  Must be a valid `VideoStatus` string,
+   *   but the parameter is typed as `string` to avoid importing the union here.
+   * @param videoId - Primary key of the `videos` row to update.
+   * @returns Resolves when the D1 write completes successfully.
+   *
+   * @example
+   * ```ts
+   * await this.updateStatus("transcoding", videoId);
+   * ```
+   */
+  private async updateStatus(status: string, videoId: string): Promise<void> {
+    await this.env.DB.prepare(
+      "UPDATE videos SET status = ?, updated_at = ? WHERE id = ?",
+    )
+      .bind(status, new Date().toISOString(), videoId)
+      .run();
+  }
+
+  /**
+   * Calls a named endpoint on the per-video ffmpeg container and throws a
+   * descriptive error if the container reports failure.
+   *
+   * Each call follows the same four-step pattern used by Steps 2 (slow path),
+   * 3, and 4:
+   *  1. Generate a presigned GET URL for the input R2 object.
+   *  2. Generate a presigned PUT URL for the output R2 object.
+   *  3. POST both URLs as JSON to the container endpoint.
+   *  4. Parse the `ContainerResult` response; throw on `ok: false`.
+   *
+   * The container instance is retrieved via `getByName(videoId)` — an idempotent
+   * call that returns the same Durable Object stub for the same name, so the
+   * container stays warm across sequential steps within the 60-second `sleepAfter`
+   * window.
+   *
+   * @param videoId - Video ID used to look up the named container instance and
+   *   to construct the R2 key prefixes.
+   * @param endpoint - Container HTTP path without a leading slash (e.g.
+   *   `"transcode"`, `"extract-audio"`, `"grayscale"`).
+   * @param inputKey - R2 object key for the input file.  A presigned GET URL is
+   *   generated from this key and passed to the container.
+   * @param outputKey - R2 object key for the output file.  A presigned PUT URL is
+   *   generated from this key and passed to the container.
+   * @param errorLabel - Human-readable label prepended to the error message when
+   *   the container reports failure (e.g. `"Transcode"`, `"Audio extraction"`).
+   * @returns Resolves when the container reports `ok: true`.
+   * @throws {Error} If the container returns `ok: false`, with a message of the
+   *   form `"<errorLabel> failed: <container error text>"`.
+   *
+   * @example
+   * ```ts
+   * await this.callContainer(
+   *   videoId,
+   *   "extract-audio",
+   *   `video/${videoId}.mp4`,
+   *   `audio/${videoId}.mp3`,
+   *   "Audio extraction",
+   * );
+   * ```
+   */
+  private async callContainer(
+    videoId: string,
+    endpoint: string,
+    inputKey: string,
+    outputKey: string,
+    errorLabel: string,
+  ): Promise<void> {
+    const inputUrl = await generatePresignedUrl(
+      this.env,
+      this.env.R2_BUCKET_NAME,
+      inputKey,
+      "GET",
+    );
+    const outputUrl = await generatePresignedUrl(
+      this.env,
+      this.env.R2_BUCKET_NAME,
+      outputKey,
+      "PUT",
+    );
+
+    const container = this.env.FFMPEG_CONTAINER.getByName(videoId);
+    const resp = await container.fetch(`http://container/${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ input_url: inputUrl, output_url: outputUrl }),
+    });
+
+    const result = await resp.json<ContainerResult>();
+    if (!result.ok) {
+      throw new Error(`${errorLabel} failed: ${result.error}`);
+    }
+  }
+
+  /**
+   * Emits a structured JSON log line marking the start or completion of a
+   * workflow step.
+   *
+   * All step log lines share the same four-field shape so they can be filtered
+   * and aggregated consistently in Cloudflare Observability / Logpush:
+   *
+   * ```json
+   * { "step": "transcode", "videoId": "…", "status": "started", "timestamp": "…" }
+   * ```
+   *
+   * This replaces the ten identical `console.log(JSON.stringify({…}))` call
+   * sites that previously appeared at the entry and exit of each step body.
+   *
+   * @param stepName - Name of the workflow step as registered with `step.do()`
+   *   (e.g. `"register"`, `"transcode"`, `"extract-audio"`).
+   * @param videoId - Video ID included in every log line for correlation.
+   * @param status - `"started"` when the step begins executing; `"completed"`
+   *   when it finishes successfully.
+   *
+   * @example
+   * ```ts
+   * this.logStep("grayscale", videoId, "started");
+   * // ... do work ...
+   * this.logStep("grayscale", videoId, "completed");
+   * ```
+   */
+  private logStep(
+    stepName: string,
+    videoId: string,
+    status: "started" | "completed",
+  ): void {
+    console.log(
+      JSON.stringify({
+        step: stepName,
+        videoId,
+        status,
+        timestamp: new Date().toISOString(),
+      }),
+    );
   }
 }
