@@ -642,6 +642,7 @@ No manual `wrangler secret put` step is needed — API tokens for R2 and Stream 
 | `prestart` | `npm run build:ui` | Auto-build UI before dev server |
 | `start` | `wrangler dev` | Local development (Worker + pre-built UI) |
 | `start:ui` | `cd ui && npm run dev` | Vite watch mode (run alongside `start` for live frontend rebuilds) |
+| `preteardown` | `node scripts/empty-bucket.mjs` | Empty R2 bucket before destroy (prompts for confirmation) |
 | `teardown` | `terraform -chdir=infra destroy -auto-approve` | Destroy infrastructure |
 | `postteardown` | `shx rm -f wrangler.jsonc` | Clean up generated config |
 | `check` | `run-s check:*` | Run all checks sequentially (fail-fast) |
